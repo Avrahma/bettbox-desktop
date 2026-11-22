@@ -1,0 +1,153 @@
+import 'dart:async';
+
+import 'package:bett_box/common/app_api.dart';
+import 'package:bett_box/common/preferences.dart';
+import 'package:flutter/foundation.dart';
+
+/// 界面元素的可见性控制：
+/// 1.「配置」入口与配置卡片默认按套餐状态决定，首页标题连续点击 5 次可切换显示/隐藏；
+/// 2. 活跃连接、内存信息默认隐藏，由用户在设置中自由开关；
+/// 3. 登录页的服务器地址入口默认隐藏，连续点击站点名 3 次可切换显示/隐藏。
+class AppVisibility extends ChangeNotifier {
+  AppVisibility._();
+
+  static final AppVisibility instance = AppVisibility._();
+
+  static const String _kAdvancedStats = 'app_visibility_advanced_stats';
+  static const String _kProfileOverride = 'app_visibility_profile_unlocked';
+  static const String _kToolsOther = 'app_visibility_tools_other';
+
+  bool _showAdvancedStats = false;
+  bool _toolsOtherVisible = false;
+
+  /// null 表示跟随套餐状态；true / false 表示用户手动强制显示 / 隐藏。
+  bool? _profileOverride;
+  bool _serverAddressVisible = false;
+  bool _initialized = false;
+
+  int _profileTapCount = 0;
+  DateTime? _profileLastTap;
+  int _titleTapCount = 0;
+  DateTime? _titleLastTap;
+  int _toolsTapCount = 0;
+  DateTime? _toolsTapLast;
+
+  bool get showAdvancedStats => _showAdvancedStats;
+
+  bool get profileUnlocked => _profileOverride ?? hasActivePlan;
+
+  bool get serverAddressVisible => _serverAddressVisible;
+
+  /// 是否购买有效套餐。
+  bool get hasActivePlan {
+    final sub = AppAuth.instance.subscription;
+    return sub != null && !sub.expired;
+  }
+
+  /// 「更多」页最后一栏「其他」是否显示，默认隐藏。
+  bool get toolsOtherVisible => _toolsOtherVisible;
+
+  /// 「配置」入口与配置卡片是否可见。
+  bool get showProfileEntries => _profileOverride ?? hasActivePlan;
+
+  Future<void> init() async {
+    if (_initialized) {
+      return;
+    }
+    _initialized = true;
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      _showAdvancedStats = prefs?.getBool(_kAdvancedStats) ?? false;
+      _profileOverride = prefs?.getBool(_kProfileOverride);
+      _toolsOtherVisible = prefs?.getBool(_kToolsOther) ?? false;
+    } catch (_) {
+      // 读取失败时使用默认值。
+    }
+    notifyListeners();
+  }
+
+  Future<void> setShowAdvancedStats(bool value) async {
+    if (_showAdvancedStats == value) {
+      return;
+    }
+    _showAdvancedStats = value;
+    notifyListeners();
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      await prefs?.setBool(_kAdvancedStats, value);
+    } catch (_) {
+      // 忽略持久化失败。
+    }
+  }
+
+  Future<void> _persistProfileOverride(bool value) async {
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      await prefs?.setBool(_kProfileOverride, value);
+    } catch (_) {
+      // 忽略持久化失败。
+    }
+  }
+
+  /// 首页标题连续点击 5 次：在显示与隐藏之间切换「配置」入口。
+  void tapDashboardTitle() {
+    final now = DateTime.now();
+    final last = _profileLastTap;
+    _profileTapCount = (last != null &&
+            now.difference(last) <= const Duration(milliseconds: 1500))
+        ? _profileTapCount + 1
+        : 1;
+    _profileLastTap = now;
+    if (_profileTapCount >= 5) {
+      _profileTapCount = 0;
+      _profileLastTap = null;
+      _profileOverride = !showProfileEntries;
+      notifyListeners();
+      unawaited(_persistProfileOverride(_profileOverride!));
+    }
+  }
+
+  /// 「更多」页标题连续点击 5 次：在显示与隐藏之间切换「其他」栏。
+  void tapToolsTitle() {
+    final now = DateTime.now();
+    final last = _toolsTapLast;
+    _toolsTapCount = (last != null &&
+            now.difference(last) <= const Duration(milliseconds: 1500))
+        ? _toolsTapCount + 1
+        : 1;
+    _toolsTapLast = now;
+    if (_toolsTapCount >= 5) {
+      _toolsTapCount = 0;
+      _toolsTapLast = null;
+      _toolsOtherVisible = !_toolsOtherVisible;
+      notifyListeners();
+      unawaited(_persistToolsOther(_toolsOtherVisible));
+    }
+  }
+
+  Future<void> _persistToolsOther(bool value) async {
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      await prefs?.setBool(_kToolsOther, value);
+    } catch (_) {
+      // 忽略持久化失败。
+    }
+  }
+
+  /// 登录页站点名连续点击 3 次：在显示与隐藏之间切换服务器地址入口。
+  void tapLoginTitle() {
+    final now = DateTime.now();
+    final last = _titleLastTap;
+    _titleTapCount = (last != null &&
+            now.difference(last) <= const Duration(milliseconds: 1500))
+        ? _titleTapCount + 1
+        : 1;
+    _titleLastTap = now;
+    if (_titleTapCount >= 3) {
+      _titleTapCount = 0;
+      _titleLastTap = null;
+      _serverAddressVisible = !_serverAddressVisible;
+      notifyListeners();
+    }
+  }
+}

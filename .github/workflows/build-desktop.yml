@@ -1,0 +1,135 @@
+name: build-desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  SENTRY_BACKEND: none
+
+jobs:
+  windows:
+    name: windows-amd64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Enable Git long paths
+        run: git config --global core.longpaths true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.50.1'
+          cache: true
+
+      - name: Patch sing-tun forwarding
+        shell: bash
+        run: |
+          cd core
+          V=$(grep -E 'github\.com/metacubex/sing-tun\s+v[^[:space:]]+' go.mod | awk '{print $2}')
+          echo "sing-tun: ${V}"
+          go mod download github.com/metacubex/sing-tun@${V}
+          M=$(go env GOMODCACHE | tr '\\' '/')
+          F="${M}/github.com/metacubex/sing-tun@${V}/tun_windows.go"
+          perl -pi -e 's/inetIf\.ForwardingEnabled = true/inetIf.ForwardingEnabled = false/g' "${F}"
+          echo "patched ${F}"
+
+      - name: Build core
+        shell: bash
+        run: |
+          flutter pub get
+          dart run build_runner build
+          dart setup.dart windows --arch amd64 --out core-only
+
+      - name: Build helper service
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash libclash/windows/BettboxCore.exe -Algorithm SHA256).Hash.ToLower()
+          Write-Host "core sha256: $h"
+          dart setup.dart windows --arch amd64 --out helper --core-hash $h
+
+      - name: Build app
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash libclash/windows/BettboxCore.exe -Algorithm SHA256).Hash.ToLower()
+          flutter build windows --release --dart-define=CORE_SHA256=$h --dart-define=APP_ENV=pre --dart-define=APP_ASSET_SUFFIX=windows-amd64-setup.exe
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Package installer
+        shell: bash
+        run: dart windows/packaging/exe/package_windows.dart --arch amd64 --env pre
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: bettbox-windows-amd64
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+  macos:
+    name: macos-${{ matrix.arch }}
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: core/go.sum
+
+      - name: Select Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.50.1'
+          cache: true
+
+      - name: Disable Swift Package Manager
+        run: flutter config --no-enable-swift-package-manager
+
+      - name: Build macOS
+        shell: bash
+        run: |
+          flutter pub get
+          dart run build_runner build
+          dart setup.dart macos --arch ${{ matrix.arch }} --env pre
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: bettbox-macos-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
