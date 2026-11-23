@@ -7,7 +7,9 @@ import 'package:flutter/foundation.dart';
 /// 界面元素的可见性控制：
 /// 1.「配置」入口与配置卡片默认按套餐状态决定，首页标题连续点击 5 次可切换显示/隐藏；
 /// 2. 活跃连接、内存信息默认隐藏，由用户在设置中自由开关；
-/// 3. 登录页的服务器地址入口默认隐藏，连续点击站点名 3 次可切换显示/隐藏。
+/// 3. 登录页的服务器地址入口默认隐藏，连续点击站点名 3 次可切换显示/隐藏；
+/// 4.「配置」页的「添加配置」按钮默认隐藏，连续点击标题 3 次可切换显示/隐藏，
+///    显示后超过 3 秒无操作自动隐藏。
 class AppVisibility extends ChangeNotifier {
   AppVisibility._();
 
@@ -23,6 +25,7 @@ class AppVisibility extends ChangeNotifier {
   /// null 表示跟随套餐状态；true / false 表示用户手动强制显示 / 隐藏。
   bool? _profileOverride;
   bool _serverAddressVisible = false;
+  bool _addProfileVisible = false;
   bool _initialized = false;
 
   int _profileTapCount = 0;
@@ -31,12 +34,18 @@ class AppVisibility extends ChangeNotifier {
   DateTime? _titleLastTap;
   int _toolsTapCount = 0;
   DateTime? _toolsTapLast;
+  int _profilesTapCount = 0;
+  DateTime? _profilesTapLast;
+  Timer? _addProfileHideTimer;
 
   bool get showAdvancedStats => _showAdvancedStats;
 
   bool get profileUnlocked => _profileOverride ?? hasActivePlan;
 
   bool get serverAddressVisible => _serverAddressVisible;
+
+  /// 「配置」页的「添加配置」按钮是否可见，默认隐藏。
+  bool get addProfileVisible => _addProfileVisible;
 
   /// 是否购买有效套餐。
   bool get hasActivePlan {
@@ -149,5 +158,51 @@ class AppVisibility extends ChangeNotifier {
       _serverAddressVisible = !_serverAddressVisible;
       notifyListeners();
     }
+  }
+
+  /// 「配置」页标题连续点击 3 次：在显示与隐藏之间切换「添加配置」按钮。
+  /// 显示后若 3 秒内无任何点击，自动恢复隐藏。
+  void tapProfilesTitle() {
+    final now = DateTime.now();
+    final last = _profilesTapLast;
+    _profilesTapCount = (last != null &&
+            now.difference(last) <= const Duration(milliseconds: 1500))
+        ? _profilesTapCount + 1
+        : 1;
+    _profilesTapLast = now;
+    if (_profilesTapCount >= 3) {
+      _profilesTapCount = 0;
+      _profilesTapLast = null;
+      _setAddProfileVisible(!_addProfileVisible);
+      return;
+    }
+    // 按钮已显示时，任何点击都重新开始 3 秒倒计时。
+    if (_addProfileVisible) {
+      _restartAddProfileHideTimer();
+    }
+  }
+
+  void _setAddProfileVisible(bool value) {
+    _addProfileHideTimer?.cancel();
+    _addProfileHideTimer = null;
+    if (_addProfileVisible != value) {
+      _addProfileVisible = value;
+      notifyListeners();
+    }
+    if (value) {
+      _restartAddProfileHideTimer();
+    }
+  }
+
+  void _restartAddProfileHideTimer() {
+    _addProfileHideTimer?.cancel();
+    _addProfileHideTimer = Timer(const Duration(seconds: 3), () {
+      _addProfileHideTimer = null;
+      if (!_addProfileVisible) {
+        return;
+      }
+      _addProfileVisible = false;
+      notifyListeners();
+    });
   }
 }

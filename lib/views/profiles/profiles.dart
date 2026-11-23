@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:bett_box/common/app_visibility.dart';
 import 'package:bett_box/common/common.dart';
 import 'package:bett_box/enum/enum.dart';
 import 'package:bett_box/models/models.dart';
@@ -403,17 +404,33 @@ class _ProfilesViewState extends ConsumerState<ProfilesView>
       if (prev?.showNodes == next.showNodes || !next.animate) return;
       _flashController.forward(from: 0);
     });
-    return CommonScaffold(
-      title: showNodes ? appLocalizations.node : appLocalizations.profiles,
-      floatingActionButton: _buildFAB(),
-      actions: _buildActions(),
-      body: SlidePages(
-        index: showNodes ? 1 : 0,
-        animate: animate,
-        scrollable: !(system.isAndroid && nodesEmpty && !showNodes),
-        onChanged: _handleSlideChanged,
-        children: [_buildProfiles(), const NodesBody()],
-      ),
+    return ListenableBuilder(
+      listenable: AppVisibility.instance,
+      builder: (context, _) {
+        // 「添加配置」按钮默认隐藏，点击标题 3 次可临时显示 3 秒。
+        final addProfileVisible = AppVisibility.instance.addProfileVisible;
+        return CommonScaffold(
+          titleWidget: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: AppVisibility.instance.tapProfilesTitle,
+            child: Text(
+              showNodes ? appLocalizations.node : appLocalizations.profiles,
+              style: context.textTheme.titleLarge,
+            ),
+          ),
+          floatingActionButton: showNodes || addProfileVisible
+              ? _buildFAB()
+              : null,
+          actions: _buildActions(),
+          body: SlidePages(
+            index: showNodes ? 1 : 0,
+            animate: animate,
+            scrollable: !(system.isAndroid && nodesEmpty && !showNodes),
+            onChanged: _handleSlideChanged,
+            children: [_buildProfiles(), const NodesBody()],
+          ),
+        );
+      },
     );
   }
 
