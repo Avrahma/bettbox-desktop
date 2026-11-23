@@ -529,6 +529,17 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                 verticalPadding: verticalPadding,
               );
 
+              // 宽屏时网络速度卡已随账户卡并排展示，网格中不再重复出现。
+              final wideAccountRow = contentWidth - 32 > 720;
+              final gridChildren = wideAccountRow
+                  ? [
+                      for (final tile in children)
+                        if (tile.widget != DashboardWidget.networkSpeed &&
+                            tile.widget != DashboardWidget.networkSpeedSmall)
+                          tile,
+                    ]
+                  : children;
+
               final dashboardContent = ConstrainedBox(
                 constraints: const BoxConstraints(
                   maxWidth: dashboardMaxGridWidth,
@@ -547,20 +558,46 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                         builder: (context, cardConstraints) {
                           final available = cardConstraints.maxWidth;
                           // 宽屏（桌面端）下账户卡不再铺满整行，
-                          // 收窄到约网格一半宽度并靠左对齐；窄屏保持铺满。
-                          final cardWidth = available > 720
-                              ? math.min(
-                                  520.0,
-                                  (available - spacing * 7) / 8 * 4 +
-                                      spacing * 3,
-                                )
-                              : available;
-                          return Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: SizedBox(
-                              width: cardWidth,
-                              child: const AppAccountCard(),
-                            ),
+                          // 收窄到约网格一半宽度，右侧空出位置放网络速度卡；
+                          // 窄屏保持铺满，网络速度仍留在下方网格中。
+                          if (available <= 720) {
+                            return Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: SizedBox(
+                                width: available,
+                                child: const AppAccountCard(),
+                              ),
+                            );
+                          }
+                          final cardWidth = math.min(
+                            520.0,
+                            (available - spacing * 7) / 8 * 4 + spacing * 3,
+                          );
+                          // 仅当用户配置里保留了网络速度卡片时才并排展示，
+                          // 避免用户把该卡片删掉后仍被动出现。
+                          final showSideSpeed = children.any(
+                            (tile) =>
+                                tile.widget == DashboardWidget.networkSpeed ||
+                                tile.widget ==
+                                    DashboardWidget.networkSpeedSmall,
+                          );
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: cardWidth,
+                                child: const AppAccountCard(),
+                              ),
+                              if (showSideSpeed) ...[
+                                SizedBox(width: spacing),
+                                Expanded(
+                                  child: SizedBox(
+                                    height: getWidgetHeight(context, 3),
+                                    child: const NetworkSpeed(),
+                                  ),
+                                ),
+                              ],
+                            ],
                           );
                         },
                       ),
@@ -581,7 +618,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                       _buildIsEdit(
                         (isEdit) => EditableGrid<DashboardTile>(
                           key: const ValueKey('dashboard-grid'),
-                          items: children,
+                          items: gridChildren,
                           editing: isEdit,
                           crossAxisCount: columns,
                           crossAxisSpacing: spacing,
