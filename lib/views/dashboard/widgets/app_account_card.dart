@@ -82,11 +82,16 @@ class _AppAccountCardState extends State<AppAccountCard> {
         content: const Text('退出登录会清除本机已导入的配置（含手动添加的配置），重新登录后按当前账号的套餐自动恢复。'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            // 桌面端每个 Tab 内容都套在各自的 Navigator 里，必须显式回到
+            // 根 Navigator 才能关闭本对话框，否则只会 pop 掉 Tab 内的页面，
+            // 对话框仍停留在屏幕上（表现为“卡在退出登录提示”）。
+            onPressed: () =>
+                Navigator.of(context, rootNavigator: true).pop(false),
             child: const Text('取消'),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () =>
+                Navigator.of(context, rootNavigator: true).pop(true),
             child: const Text('退出'),
           ),
         ],
