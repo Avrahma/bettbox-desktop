@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/pages/recharge.dart';
 import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
@@ -66,6 +67,19 @@ class _AppAccountCardState extends State<AppAccountCard> {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ShopPage()),
       ),
+    );
+  }
+
+  /// 打开余额充值：粘贴支付宝口令红包密码，管理员确认后到账。
+  void _openRecharge() {
+    unawaited(
+      Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => const RechargePage()),
+      ).then((_) {
+        if (mounted) {
+          unawaited(_refresh());
+        }
+      }),
     );
   }
 
@@ -547,12 +561,34 @@ class _AppAccountCardState extends State<AppAccountCard> {
                   maxLines: 1,
                 ),
               ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _openRecharge,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  shape: RoundedSuperellipseBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  textStyle: theme.textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                child: const Text('充值', maxLines: 1),
+              ),
               const Spacer(),
-              Text(
-                sub == null ? '未开通' : '订阅有效',
-                maxLines: 1,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+              Flexible(
+                child: Text(
+                  sub == null ? '未开通' : '订阅有效',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+                  ),
                 ),
               ),
             ],

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/pages/recharge.dart';
+import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
 import 'package:material_ui/material_ui.dart';
@@ -59,20 +61,26 @@ class _AppAccountCardState extends State<AppAccountCard> {
     );
   }
 
-  /// 打开站点的指定页面（购买 / 续费），已登录时按 ticket 免密进入。
-  Future<void> _openSite(String Function(AppAuth auth) urlOf) async {
-    var url = urlOf(AppAuth.instance);
-    if (url.isEmpty) {
-      final valid = await _ensureRefreshed();
-      if (!valid) {
-        return;
-      }
-      url = urlOf(AppAuth.instance);
-    }
-    if (url.isEmpty) {
-      return;
-    }
-    unawaited(globalState.openUrl(url));
+  /// 打开套餐中心：App 内查看套餐、用余额购买并自动开通。
+  void _openShop() {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ShopPage()),
+      ),
+    );
+  }
+
+  /// 打开余额充值：粘贴支付宝口令红包密码，管理员确认后到账。
+  void _openRecharge() {
+    unawaited(
+      Navigator.of(context)
+          .push<bool>(MaterialPageRoute(builder: (_) => const RechargePage()))
+          .then((_) {
+            if (mounted) {
+              unawaited(_refresh());
+            }
+          }),
+    );
   }
 
   Future<void> _logout() async {
@@ -559,13 +567,7 @@ class _AppAccountCardState extends State<AppAccountCard> {
           Row(
             children: [
               FilledButton(
-                onPressed: () => unawaited(
-                  _openSite(
-                    (auth) => sub == null
-                        ? (auth.purchaseUrl ?? '')
-                        : (auth.renewalUrl ?? ''),
-                  ),
-                ),
+                onPressed: _openShop,
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(0, 36),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -581,12 +583,34 @@ class _AppAccountCardState extends State<AppAccountCard> {
                 ),
                 child: Text(sub == null ? '购买套餐' : '续费 / 管理', maxLines: 1),
               ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _openRecharge,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  shape: RoundedSuperellipseBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  textStyle: theme.textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                child: const Text('充值', maxLines: 1),
+              ),
               const Spacer(),
-              Text(
-                sub == null ? '未开通' : '订阅有效',
-                maxLines: 1,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+              Flexible(
+                child: Text(
+                  sub == null ? '未开通' : '订阅有效',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+                  ),
                 ),
               ),
             ],

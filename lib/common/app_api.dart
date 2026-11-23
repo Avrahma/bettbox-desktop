@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:bett_box/common/preferences.dart';
 import 'package:bett_box/common/print.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 
 /// 账户订阅流量信息，来自订阅响应头 subscription-userinfo。
@@ -238,6 +240,8 @@ class AppPlan {
     required this.price,
     required this.months,
     required this.description,
+    this.features = const <String>[],
+    this.tierLabel = '',
   });
 
   final int id;
@@ -245,6 +249,12 @@ class AppPlan {
   final double price;
   final int months;
   final String description;
+
+  /// 服务端从套餐富文本解析出的逐条要点（流量、设备数、节点等）。
+  final List<String> features;
+
+  /// 线路等级标签：普通线路 / 高级线路 / 专线 / 定制。
+  final String tierLabel;
 
   /// 服务端用 months<=0 表示永久套餐。
   String get periodText {
@@ -257,6 +267,15 @@ class AppPlan {
     return '$months 个月';
   }
 
+  /// 折合每月价格，用于长期套餐的性价比提示。
+  String get monthlyHint {
+    if (months <= 1 || price <= 0) {
+      return '';
+    }
+    final per = price / months;
+    return '折合 ¥${per.toStringAsFixed(per >= 10 ? 1 : 2)}/月';
+  }
+
   /// 站点套餐详情是富文本，这里剥离标签供列表展示。
   String get summary {
     final text = description
@@ -267,13 +286,33 @@ class AppPlan {
     return text.isEmpty ? '下单后由管理员确认收款并自动分配订阅' : text;
   }
 
+  /// 列表展示用的要点：优先用服务端解析结果，回退到摘要文本。
+  List<String> get bullets {
+    if (features.isNotEmpty) {
+      return features;
+    }
+    return <String>[summary];
+  }
+
   static AppPlan fromJson(Map<String, dynamic> json) {
+    final features = <String>[];
+    final rawFeatures = json['features'];
+    if (rawFeatures is List) {
+      for (final item in rawFeatures) {
+        final text = item?.toString().trim() ?? '';
+        if (text.isNotEmpty) {
+          features.add(text);
+        }
+      }
+    }
     return AppPlan(
       id: (json['id'] as num?)?.toInt() ?? 0,
       name: json['name']?.toString() ?? '',
       price: (json['price'] as num?)?.toDouble() ?? 0,
       months: (json['months'] as num?)?.toInt() ?? 0,
       description: json['description']?.toString() ?? '',
+      features: features,
+      tierLabel: json['tier_label']?.toString() ?? '',
     );
   }
 }
@@ -376,6 +415,101 @@ class AppApiException implements Exception {
   String toString() => message;
 }
 
+/// 余额支付下单失败：余额不足时带上缺口金额，便于引导去充值。
+class AppPurchaseException extends AppApiException {
+  AppPurchaseException(
+    super.message, {
+    this.shortfall = 0,
+    this.needRecharge = false,
+  });
+
+  final double shortfall;
+  final bool needRecharge;
+}
+
+/// App 内充值申请（支付宝口令红包）。
+class AppRecharge {
+  const AppRecharge({
+    required this.id,
+    required this.amount,
+    required this.status,
+    required this.statusLabel,
+    required this.createdAt,
+    this.note = '',
+  });
+
+  final int id;
+  final double amount;
+  final String status;
+  final String statusLabel;
+  final String createdAt;
+
+  /// 处理备注：待确认说明 / 管理员拒绝原因 / 确认到账金额。
+  final String note;
+
+  bool get pending => status == 'pending';
+
+  bool get approved => status == 'approved';
+
+  bool get rejected => status == 'rejected';
+
+  static AppRecharge fromJson(Map<String, dynamic> json) {
+    return AppRecharge(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      status: json['status']?.toString() ?? '',
+      statusLabel: json['status_label']?.toString() ?? '',
+      createdAt: json['created_at']?.toString() ?? '',
+      note: json['note']?.toString() ?? '',
+    );
+  }
+}
+
+/// 钱包数据：账户余额、充值记录与站点充值说明。
+class AppWallet {
+  const AppWallet({
+    required this.balance,
+    required this.recharges,
+    required this.guide,
+  });
+
+  final double balance;
+  final List<AppRecharge> recharges;
+  final String guide;
+
+  static AppWallet fromJson(Map<String, dynamic> json) {
+    final recharges = <AppRecharge>[];
+    final raw = json['recharges'];
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map) {
+          recharges.add(AppRecharge.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
+    }
+    return AppWallet(
+      balance: (json['balance'] as num?)?.toDouble() ?? 0,
+      recharges: recharges,
+      guide: json['guide']?.toString() ?? '',
+    );
+  }
+}
+
+/// 余额支付购买结果。
+class AppPurchaseResult {
+  const AppPurchaseResult({
+    required this.order,
+    required this.balance,
+    required this.message,
+    required this.expiresOn,
+  });
+
+  final AppOrder order;
+  final double balance;
+  final String message;
+  final String expiresOn;
+}
+
 /// 客户端登录态与账号数据管理。
 class AppAuth extends ChangeNotifier {
   AppAuth._();
@@ -425,7 +559,7 @@ class AppAuth extends ChangeNotifier {
   }
 
   Dio _dio() {
-    return Dio(
+    final dio = Dio(
       BaseOptions(
         baseUrl: _baseUrl,
         connectTimeout: const Duration(seconds: 15),
@@ -434,6 +568,40 @@ class AppAuth extends ChangeNotifier {
         validateStatus: (status) => status != null && status < 500,
       ),
     );
+    // 站点接口固定直连：App 内的 HttpClient 全局被 HttpOverrides 接管，
+    // 代理运行时会把请求塞进本机 mixedPort；一旦节点失效，登录也会被拖死。
+    dio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: () {
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 15);
+        client.findProxy = (_) => 'DIRECT';
+        return client;
+      },
+    );
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onError: (error, handler) async {
+          final retriable =
+              error.type == DioExceptionType.connectionError ||
+              error.type == DioExceptionType.connectionTimeout;
+          final retried = error.requestOptions.extra['appRetried'] == true;
+          if (retriable && !retried) {
+            await Future<void>.delayed(const Duration(milliseconds: 1200));
+            try {
+              final options = error.requestOptions;
+              options.extra['appRetried'] = true;
+              final response = await dio.fetch<dynamic>(options);
+              handler.resolve(response);
+              return;
+            } catch (_) {
+              // 保留原始错误，交给调用方展示
+            }
+          }
+          handler.next(error);
+        },
+      ),
+    );
+    return dio;
   }
 
   Future<void> restore() async {
@@ -481,6 +649,54 @@ class AppAuth extends ChangeNotifier {
     final prefs = await preferences.sharedPreferencesCompleter.future;
     await prefs?.setString(_kBase, normalized);
     notifyListeners();
+  }
+
+  /// 逐层诊断：DNS 解析 → TCP 连接 → HTTPS 接口，便于定位连不上的原因。
+  Future<List<String>> diagnose() async {
+    final lines = <String>[];
+    final uri = Uri.tryParse(_baseUrl);
+    final host = uri?.host ?? '';
+    final scheme = uri?.scheme ?? 'https';
+    final port = uri?.port ?? (scheme == 'https' ? 443 : 80);
+    lines.add('服务器：$_baseUrl');
+    if (host.isEmpty) {
+      lines.add('地址解析：失败，服务器地址格式不正确');
+      return lines;
+    }
+    final stopwatch = Stopwatch()..start();
+    var dnsOk = false;
+    try {
+      final addresses = await InternetAddress.lookup(host)
+          .timeout(const Duration(seconds: 6));
+      final list = addresses.map((e) => e.address).toSet().join(', ');
+      lines.add('DNS 解析：正常（$list，${stopwatch.elapsedMilliseconds}ms）');
+      dnsOk = true;
+    } catch (e) {
+      lines.add('DNS 解析：失败（$e）');
+    }
+    stopwatch
+      ..reset()
+      ..start();
+    if (dnsOk) {
+      try {
+        final socket = await Socket.connect(
+          host,
+          port,
+          timeout: const Duration(seconds: 6),
+        );
+        socket.destroy();
+        lines.add('TCP $port：可连接（${stopwatch.elapsedMilliseconds}ms）');
+      } catch (e) {
+        lines.add('TCP $port：失败（$e）');
+      }
+    }
+    try {
+      final response = await _dio().get<dynamic>('/api/app/health');
+      lines.add('HTTPS 接口：HTTP ${response.statusCode}');
+    } on DioException catch (e) {
+      lines.add('HTTPS 接口：失败（${_dioMessage(e)}）');
+    }
+    return lines;
   }
 
   /// 探测服务器是否可用，返回站点名称。
@@ -599,6 +815,113 @@ class AppAuth extends ChangeNotifier {
     }
   }
 
+  /// 钱包数据：账户余额、充值记录与站点充值说明。
+  Future<AppWallet> fetchWallet() async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().get<dynamic>(
+        '/api/app/wallet',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppApiException(data['error']?.toString() ?? '加载失败，请稍后重试');
+      }
+      return AppWallet.fromJson(data);
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
+  /// 提交支付宝口令红包密码：服务端建待确认充值单并邮件提醒管理员。
+  Future<AppRecharge> submitRecharge(String alipayCode) async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().post<dynamic>(
+        '/api/app/recharge',
+        data: {'alipay_code': alipayCode},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppApiException(data['error']?.toString() ?? '提交失败，请稍后重试');
+      }
+      final raw = data['recharge'];
+      return raw is Map
+          ? AppRecharge.fromJson(Map<String, dynamic>.from(raw))
+          : const AppRecharge(
+              id: 0,
+              amount: 0,
+              status: 'pending',
+              statusLabel: '待确认到账',
+              createdAt: '',
+            );
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
+  /// 余额支付购买套餐：服务端扣余额、建链并自动开通订阅。
+  Future<AppPurchaseResult> purchaseWithBalance(int planId) async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().post<dynamic>(
+        '/api/app/purchase',
+        data: {'plan_id': planId},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppPurchaseException(
+          data['error']?.toString() ?? '下单失败，请稍后重试',
+          shortfall: (data['shortfall'] as num?)?.toDouble() ?? 0,
+          needRecharge: data['need_recharge'] == true,
+        );
+      }
+      final rawOrder = data['order'];
+      return AppPurchaseResult(
+        order: rawOrder is Map
+            ? AppOrder.fromJson(Map<String, dynamic>.from(rawOrder))
+            : const AppOrder(
+                id: 0,
+                planName: '',
+                amount: 0,
+                status: 'approved',
+                statusLabel: '已开通',
+                alipayCode: '',
+                createdAt: '',
+                canClaim: false,
+              ),
+        balance: (data['balance'] as num?)?.toDouble() ?? 0,
+        message: data['message']?.toString() ?? '购买成功，订阅已开通',
+        expiresOn: data['expires_on']?.toString() ?? '',
+      );
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
   /// 创建支付宝口令订单；[alipayCode] 为空表示先建单、稍后再补口令。
   Future<AppOrder> submitOrder({required int planId, String alipayCode = ''}) {
     return _shopOrder('/api/app/orders', {
@@ -617,10 +940,7 @@ class AppAuth extends ChangeNotifier {
     });
   }
 
-  Future<AppOrder> _shopOrder(
-    String path,
-    Map<String, dynamic> payload,
-  ) async {
+  Future<AppOrder> _shopOrder(String path, Map<String, dynamic> payload) async {
     final token = _token;
     if (token == null || token.isEmpty) {
       throw AppApiException('登录已失效，请重新登录');
@@ -715,8 +1035,10 @@ class AppAuth extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final prefs = await preferences.sharedPreferencesCompleter.future
-          .timeout(const Duration(seconds: 3), onTimeout: () => null);
+      final prefs = await preferences.sharedPreferencesCompleter.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => null,
+      );
       if (prefs == null) {
         return;
       }
@@ -755,7 +1077,15 @@ class AppAuth extends ChangeNotifier {
       return defaultBaseUrl;
     }
     if (!base.startsWith('http://') && !base.startsWith('https://')) {
-      base = 'http://$base';
+      // 未写协议时按 https 处理：Android 9+ 默认拦截明文请求，
+      // 补 http:// 会直接表现为“无法连接服务器”。
+      base = 'https://$base';
+    }
+    if (base.startsWith('http://')) {
+      final host = Uri.tryParse(base)?.host ?? '';
+      if (host == 's.553786.xyz' || host == '553786.xyz') {
+        base = 'https://${base.substring(7)}';
+      }
     }
     while (base.endsWith('/')) {
       base = base.substring(0, base.length - 1);
@@ -763,14 +1093,26 @@ class AppAuth extends ChangeNotifier {
     return base;
   }
 
-  static String _dioMessage(DioException e) {
+  String _dioMessage(DioException e) {
     switch (e.type) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
-        return '连接服务器超时，请检查网络或服务器地址';
+        return '连接服务器超时，请检查网络或服务器地址（$_baseUrl）';
       case DioExceptionType.connectionError:
-        return '无法连接服务器，请检查服务器地址';
+        final raw = '${e.error ?? ''}';
+        if (raw.contains('Failed host lookup') ||
+            raw.contains('nodename nor servname')) {
+          return '域名解析失败，请检查手机网络或 DNS 设置';
+        }
+        if (raw.contains('HandshakeException') ||
+            raw.contains('CERTIFICATE_VERIFY_FAILED')) {
+          return '证书校验失败，请检查手机系统时间是否正确';
+        }
+        if (raw.contains('Connection refused')) {
+          return '服务器拒绝连接，请检查服务器地址（$_baseUrl）';
+        }
+        return '无法连接服务器，请检查网络或服务器地址（$_baseUrl）';
       case DioExceptionType.badResponse:
         final data = e.response?.data;
         if (data is Map && data['error'] != null) {

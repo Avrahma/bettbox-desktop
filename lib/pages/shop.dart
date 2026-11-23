@@ -1,14 +1,13 @@
 import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
-import 'package:bett_box/state.dart';
-import 'package:flutter/services.dart';
+import 'package:bett_box/pages/recharge.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// 套餐中心：App 内选择套餐、粘贴支付宝口令、查看订单与开通状态。
+/// 套餐中心：App 内直接查看套餐、用余额购买并自动开通，不跳转浏览器。
 ///
-/// 流程：选套餐 → 支付宝按金额转账/发红包 → 把生成的口令粘贴提交 →
-/// 服务端立即按「新订单」提醒管理员 → 管理员在后台确认收款并分配订阅。
+/// 支付方式仅有余额支付：余额不足时引导到充值页粘贴支付宝口令红包，
+/// 管理员确认到账后余额更新，回来即可下单开通。
 class ShopPage extends StatefulWidget {
   const ShopPage({super.key});
 
@@ -20,6 +19,7 @@ class _ShopPageState extends State<ShopPage> {
   AppShopData? _data;
   String? _error;
   bool _loading = true;
+  int? _buyingPlanId;
 
   @override
   void initState() {
@@ -55,51 +55,158 @@ class _ShopPageState extends State<ShopPage> {
     }
   }
 
-  Future<void> _openPaySheet({AppPlan? plan, AppOrder? order}) async {
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _openRecharge() async {
+    await Navigator.of(context)
+        .push<bool>(MaterialPageRoute(builder: (_) => const RechargePage()));
+    if (!mounted) {
+      return;
+    }
+    await AppAuth.instance.refresh();
+    await _load();
+  }
+
+  Future<void> _buy(AppPlan plan) async {
     final data = _data;
-    if (data == null) {
+    if (data == null || _buyingPlanId != null) {
       return;
     }
-    if (plan == null && order == null) {
-      return;
-    }
-    final changed = await showModalBottomSheet<bool>(
+    final balance = data.balance;
+    final shortfall = double.parse((plan.price - balance).toStringAsFixed(2));
+    final confirmed = await showDialog<bool>(
       context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
-        ),
-        child: _PaySheet(
-          planName: order?.planName ?? plan!.name,
-          amount: order?.amount ?? plan!.price,
-          payGuide: data.payGuide,
-          codeLimit: data.codeLimit,
-          initialCode: order?.alipayCode ?? '',
-          orderId: order?.id,
-          planId: plan?.id,
-          onOrderCreated: (message) {
-            Navigator.of(sheetContext).pop(true);
-            if (!mounted) {
-              return;
-            }
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text(message)));
-          },
-        ),
-      ),
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+        final colorScheme = theme.colorScheme;
+        return AlertDialog(
+          title: Text('购买 ${plan.name}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _kv(theme, '套餐', plan.name),
+              _kv(theme, '周期', plan.periodText),
+              _kv(theme, '应付金额', '¥${plan.price.toStringAsFixed(2)}'),
+              _kv(theme, '当前余额', '¥${balance.toStringAsFixed(2)}'),
+              const SizedBox(height: 8),
+              Text(
+                shortfall > 0
+                    ? '余额不足，还差 ¥${shortfall.toStringAsFixed(2)}，需要先充值'
+                    : '支付后余额 ¥${(balance - plan.price).toStringAsFixed(2)}，'
+                          '确认后立即开通订阅',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: shortfall > 0
+                      ? colorScheme.error
+                      : colorScheme.onSurfaceVariant,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '支付方式：余额支付',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(shortfall > 0 ? '去充值' : '余额支付'),
+            ),
+          ],
+        );
+      },
     );
-    if (changed == true) {
+    if (confirmed != true) {
+      return;
+    }
+    if (shortfall > 0) {
+      await _openRecharge();
+      return;
+    }
+    setState(() => _buyingPlanId = plan.id);
+    try {
+      final result = await AppAuth.instance.purchaseWithBalance(plan.id);
+      await AppAuth.instance.refresh();
       await _load();
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已提交，等待管理员确认收款')));
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('购买成功'),
+          content: Text(
+            '${result.message}\n\n套餐：${plan.name}\n'
+            '到期时间：${result.expiresOn.isEmpty ? '以订阅页为准' : result.expiresOn}\n'
+            '当前余额：¥${result.balance.toStringAsFixed(2)}\n\n'
+            '订阅已自动下发到配置页，可直接使用。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    } on AppPurchaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      _toast(e.message);
+      if (e.needRecharge) {
+        await _openRecharge();
+      }
+    } on AppApiException catch (e) {
+      if (mounted) {
+        _toast(e.message);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _buyingPlanId = null);
+      }
     }
+  }
+
+  Widget _kv(ThemeData theme, String label, String value) {
+    final colorScheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -129,19 +236,12 @@ class _ShopPageState extends State<ShopPage> {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
                   children: [
-                    _BalanceBar(balance: data?.balance ?? 0),
-                    const SizedBox(height: 18),
-                    _SectionTitle(
-                      title: '选择套餐',
-                      trailing: TextButton(
-                        onPressed: () => unawaited(
-                          globalState.openUrl(
-                            AppAuth.instance.purchaseUrl ?? '',
-                          ),
-                        ),
-                        child: const Text('网页版'),
-                      ),
+                    _BalanceBar(
+                      balance: data?.balance ?? 0,
+                      onRecharge: () => unawaited(_openRecharge()),
                     ),
+                    const SizedBox(height: 18),
+                    _SectionTitle(title: '选择套餐'),
                     const SizedBox(height: 6),
                     if ((data?.plans ?? const <AppPlan>[]).isEmpty)
                       _EmptyHint(text: '暂无可购买套餐，请联系客服')
@@ -149,7 +249,9 @@ class _ShopPageState extends State<ShopPage> {
                       for (final plan in data!.plans) ...[
                         _PlanCard(
                           plan: plan,
-                          onBuy: () => unawaited(_openPaySheet(plan: plan)),
+                          balance: data.balance,
+                          busy: _buyingPlanId != null,
+                          onBuy: () => unawaited(_buy(plan)),
                         ),
                         const SizedBox(height: 10),
                       ],
@@ -160,18 +262,13 @@ class _ShopPageState extends State<ShopPage> {
                       _EmptyHint(text: '暂无订单，选择上方套餐即可下单')
                     else
                       for (final order in data!.orders) ...[
-                        _OrderCard(
-                          order: order,
-                          onClaim: order.waitingCode
-                              ? () => unawaited(_openPaySheet(order: order))
-                              : null,
-                        ),
+                        _OrderCard(order: order),
                         const SizedBox(height: 10),
                       ],
                     const SizedBox(height: 4),
                     Text(
-                      '说明：口令提交后订单进入待确认，管理员领取红包并确认收款后，'
-                      '系统会自动为你开通或续期套餐，无需再次操作。',
+                      '说明：全站仅支持余额支付。余额通过支付宝口令红包充值，'
+                      '管理员确认到账后余额自动更新，余额充足即可直接购买并自动开通。',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: colorScheme.onSurfaceVariant,
                         height: 1.5,
@@ -186,56 +283,78 @@ class _ShopPageState extends State<ShopPage> {
 }
 
 class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.title, this.trailing});
+  const _SectionTitle({required this.title});
 
   final String title;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Row(
-      children: [
-        Text(
-          title,
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.2,
-          ),
-        ),
-        const Spacer(),
-        ?trailing,
-      ],
+    return Text(
+      title,
+      style: theme.textTheme.titleSmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
     );
   }
 }
 
 class _BalanceBar extends StatelessWidget {
-  const _BalanceBar({required this.balance});
+  const _BalanceBar({required this.balance, required this.onRecharge});
 
   final double balance;
+  final VoidCallback onRecharge;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
       decoration: BoxDecoration(
-        color: colorScheme.primaryContainer.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(16),
+        color: colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         children: [
-          Icon(Icons.account_balance_wallet_outlined, color: colorScheme.primary),
+          Icon(
+            Icons.account_balance_wallet_outlined,
+            color: colorScheme.onPrimaryContainer,
+          ),
           const SizedBox(width: 10),
-          Text('账户余额', style: theme.textTheme.bodyMedium),
-          const Spacer(),
-          Text(
-            '¥${_money(balance)}',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '账户余额',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: colorScheme.onPrimaryContainer.withValues(
+                      alpha: 0.8,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '¥ ${balance.toStringAsFixed(2)}',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    color: colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
+          ),
+          FilledButton.tonal(
+            onPressed: onRecharge,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 34),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: const Text('充值'),
           ),
         ],
       ),
@@ -244,78 +363,204 @@ class _BalanceBar extends StatelessWidget {
 }
 
 class _PlanCard extends StatelessWidget {
-  const _PlanCard({required this.plan, required this.onBuy});
+  const _PlanCard({
+    required this.plan,
+    required this.balance,
+    required this.busy,
+    required this.onBuy,
+  });
 
   final AppPlan plan;
+  final double balance;
+  final bool busy;
   final VoidCallback onBuy;
+
+  String get _priceText => plan.price == plan.price.roundToDouble()
+      ? plan.price.toStringAsFixed(0)
+      : plan.price.toStringAsFixed(2);
+
+  // 「注意 不接受退款」这类条款用弱化图标，避免和正常权益混在一起。
+  bool _isNote(String text) => text.contains('注意') || text.contains('退款');
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: colorScheme.outlineVariant),
-        color: colorScheme.surfaceContainerLowest,
-      ),
+    final enough = balance >= plan.price;
+    final tier = plan.tierLabel.trim();
+    final hint = plan.monthlyHint;
+    final onHeader = colorScheme.onPrimaryContainer;
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Text(
-                  plan.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  colorScheme.primaryContainer.withValues(alpha: 0.95),
+                  colorScheme.primaryContainer.withValues(alpha: 0.34),
+                ],
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            plan.name,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: onHeader,
+                            ),
+                          ),
+                          if (tier.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: onHeader.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                tier,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: onHeader,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${plan.periodText}有效期',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: onHeader.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              Text(
-                '¥${_money(plan.price)}',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: colorScheme.primary,
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    RichText(
+                      text: TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '¥',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: onHeader,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          TextSpan(
+                            text: _priceText,
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              color: onHeader,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (hint.isNotEmpty)
+                      Text(
+                        hint,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: onHeader.withValues(alpha: 0.72),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: colorScheme.secondaryContainer,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              '服务期限：${plan.periodText}',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSecondaryContainer,
-              ),
+              ],
             ),
           ),
-          const SizedBox(height: 10),
-          Text(
-            plan.summary,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-              height: 1.45,
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            height: 40,
-            child: FilledButton(
-              onPressed: onBuy,
-              child: const Text('支付宝口令购买'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final item in plan.bullets)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Icon(
+                            _isNote(item)
+                                ? Icons.info_outline
+                                : Icons.check_circle_outline,
+                            size: 15,
+                            color: _isNote(item)
+                                ? colorScheme.onSurfaceVariant
+                                : colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            item,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              height: 1.45,
+                              color: _isNote(item)
+                                  ? colorScheme.onSurfaceVariant
+                                  : colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        enough
+                            ? '余额支付 · 购买后立即开通'
+                            : '余额不足 ¥${(plan.price - balance).toStringAsFixed(2)}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: enough
+                              ? colorScheme.onSurfaceVariant
+                              : colorScheme.error,
+                        ),
+                      ),
+                    ),
+                    FilledButton(
+                      onPressed: busy ? null : onBuy,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 34),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      child: const Text('购买'),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ],
@@ -325,122 +570,57 @@ class _PlanCard extends StatelessWidget {
 }
 
 class _OrderCard extends StatelessWidget {
-  const _OrderCard({required this.order, this.onClaim});
+  const _OrderCard({required this.order});
 
   final AppOrder order;
-  final VoidCallback? onClaim;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final (label, color) = _statusStyle(colorScheme);
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: colorScheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                '#${order.id}',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  order.planName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
+    final statusColor = order.approved ? Colors.green : colorScheme.primary;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    order.planName,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  label,
-                  style: theme.textTheme.labelSmall?.copyWith(color: color),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '¥${_money(order.amount)} · ${order.createdAt}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-          if (order.alipayCode.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '口令：${order.alipayCode}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                  const SizedBox(height: 3),
+                  Text(
+                    '¥${order.amount.toStringAsFixed(2)} · ${order.createdAt}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  tooltip: '复制口令',
-                  onPressed: () {
-                    Clipboard.setData(
-                      ClipboardData(text: order.alipayCode),
-                    );
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('口令已复制')),
-                    );
-                  },
-                  icon: const Icon(Icons.copy_rounded, size: 16),
-                ),
-              ],
+                ],
+              ),
             ),
-          ],
-          if (onClaim != null) ...[
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: onClaim,
-                icon: const Icon(Icons.key_outlined, size: 18),
-                label: const Text('填写支付宝口令'),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: statusColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                order.statusLabel.isEmpty ? order.status : order.statusLabel,
+                style: theme.textTheme.labelSmall?.copyWith(color: statusColor),
               ),
             ),
           ],
-        ],
+        ),
       ),
     );
-  }
-
-  (String, Color) _statusStyle(ColorScheme colorScheme) {
-    if (order.approved) {
-      return ('已开通', const Color(0xFF2E7D32));
-    }
-    if (order.status == 'rejected') {
-      return ('已拒绝', colorScheme.error);
-    }
-    if (order.waitingReview) {
-      return ('待确认收款', const Color(0xFFE65100));
-    }
-    return ('待提交口令', colorScheme.primary);
   }
 }
 
@@ -452,16 +632,10 @@ class _EmptyHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 22),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Text(
         text,
-        textAlign: TextAlign.center,
         style: theme.textTheme.bodySmall?.copyWith(
           color: theme.colorScheme.onSurfaceVariant,
         ),
@@ -481,11 +655,11 @@ class _ErrorView extends StatelessWidget {
     final theme = Theme.of(context);
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_rounded, color: theme.colorScheme.error),
+            Icon(Icons.error_outline, color: theme.colorScheme.error),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
@@ -495,244 +669,4 @@ class _ErrorView extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 支付面板：展示应付金额与操作步骤，收集支付宝口令。
-class _PaySheet extends StatefulWidget {
-  const _PaySheet({
-    required this.planName,
-    required this.amount,
-    required this.payGuide,
-    required this.codeLimit,
-    required this.initialCode,
-    required this.onOrderCreated,
-    this.orderId,
-    this.planId,
-  });
-
-  final String planName;
-  final double amount;
-  final String payGuide;
-  final int codeLimit;
-  final String initialCode;
-  final int? orderId;
-  final int? planId;
-  final ValueChanged<String> onOrderCreated;
-
-  @override
-  State<_PaySheet> createState() => _PaySheetState();
-}
-
-class _PaySheetState extends State<_PaySheet> {
-  late final TextEditingController _controller = TextEditingController(
-    text: widget.initialCode,
-  );
-  bool _submitting = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit({required bool withCode}) async {
-    if (_submitting) {
-      return;
-    }
-    final code = _controller.text.trim();
-    if (withCode && code.length < 4) {
-      setState(() => _error = '请粘贴完整的支付宝口令');
-      return;
-    }
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
-    try {
-      final auth = AppAuth.instance;
-      if (widget.orderId != null) {
-        await auth.claimOrder(orderId: widget.orderId!, alipayCode: code);
-      } else {
-        await auth.submitOrder(
-          planId: widget.planId ?? 0,
-          alipayCode: withCode ? code : '',
-        );
-      }
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context).pop(true);
-    } on AppApiException catch (e) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _error = e.message;
-        _submitting = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  widget.planName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              IconButton(
-                onPressed: _submitting
-                    ? null
-                    : () => Navigator.of(context).pop(false),
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
-          Text(
-            '¥${_money(widget.amount)}',
-            style: theme.textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 14),
-          _Step(index: 1, text: '打开支付宝，按上方金额转账或发红包给站长'),
-          _Step(index: 2, text: '支付完成后，复制支付宝生成的「口令」'),
-          _Step(index: 3, text: '回到这里粘贴口令并提交，管理员确认后自动开通'),
-          if (widget.payGuide.trim().isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest.withValues(
-                  alpha: 0.6,
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                widget.payGuide.trim(),
-                maxLines: 6,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          TextField(
-            controller: _controller,
-            enabled: !_submitting,
-            maxLength: widget.codeLimit > 0 ? widget.codeLimit : 180,
-            maxLines: 3,
-            minLines: 2,
-            decoration: const InputDecoration(
-              labelText: '支付宝口令 / 红包口令',
-              hintText: '把支付宝里生成的口令粘贴到这里',
-              alignLabelWithHint: true,
-              border: OutlineInputBorder(),
-            ),
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                _error!,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.error,
-                ),
-              ),
-            ),
-          SizedBox(
-            height: 48,
-            child: FilledButton(
-              onPressed: _submitting
-                  ? null
-                  : () => unawaited(_submit(withCode: true)),
-              child: _submitting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('我已付款，提交口令'),
-            ),
-          ),
-          if (widget.orderId == null)
-            TextButton(
-              onPressed: _submitting
-                  ? null
-                  : () => unawaited(_submit(withCode: false)),
-              child: const Text('先创建订单，稍后再填口令'),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Step extends StatelessWidget {
-  const _Step({required this.index, required this.text});
-
-  final int index;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 20,
-            height: 20,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: colorScheme.primaryContainer,
-              shape: BoxShape.circle,
-            ),
-            child: Text(
-              '$index',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: colorScheme.onPrimaryContainer,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodySmall?.copyWith(height: 1.45),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-String _money(double value) {
-  if (value == value.roundToDouble()) {
-    return value.toStringAsFixed(0);
-  }
-  return value.toStringAsFixed(2);
 }

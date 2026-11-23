@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:bett_box/common/app_visibility.dart';
-import 'package:bett_box/common/common.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../common/app_api.dart';
@@ -22,6 +21,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscure = true;
   bool _loading = false;
   String? _error;
+  bool _diagnosing = false;
   String _siteName = '';
 
   @override
@@ -86,21 +86,70 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+  Future<void> _runDiagnose() async {
+    if (_diagnosing) {
+      return;
+    }
+    setState(() => _diagnosing = true);
+    final lines = await AppAuth.instance.diagnose();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _diagnosing = false);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('网络诊断'),
+        content: SelectableText(lines.join('\n')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _editServer() async {
     final controller = TextEditingController(
       text: AppAuth.instance.baseUrl,
     );
+    // 隐藏入口：标题连点 3 次进入网络诊断，普通用户不会触发。
+    var titleTaps = 0;
+    var lastTapAt = DateTime.fromMillisecondsSinceEpoch(0);
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('服务器地址'),
+          title: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              final now = DateTime.now();
+              if (now.difference(lastTapAt) >
+                  const Duration(milliseconds: 700)) {
+                titleTaps = 0;
+              }
+              lastTapAt = now;
+              titleTaps += 1;
+              if (titleTaps >= 3) {
+                titleTaps = 0;
+                Navigator.of(dialogContext).pop();
+                Future<void>.delayed(const Duration(milliseconds: 200), () {
+                  if (mounted) {
+                    unawaited(_runDiagnose());
+                  }
+                });
+              }
+            },
+            child: const Text('服务器地址'),
+          ),
           content: TextField(
             controller: controller,
             keyboardType: TextInputType.url,
             autofocus: true,
             decoration: const InputDecoration(
-              hintText: 'http://ip:port',
+              hintText: 'https://域名',
               helperText: '更换公网 IP 或端口时在此修改',
             ),
           ),
