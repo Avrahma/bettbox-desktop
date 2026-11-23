@@ -14,7 +14,7 @@ const double maxContentWidth = 1120.0;
 enum DashboardGridBand {
   compact(columns: 8),
   medium(columns: 12),
-  wide(columns: 16);
+  wide(columns: 12);
 
   static const double _mediumBreakpoint = 520.0;
   static const double _wideBreakpoint = 880.0;

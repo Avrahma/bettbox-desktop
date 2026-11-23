@@ -12,8 +12,9 @@ import 'tile.dart';
 
 class NetworkSpeed extends ConsumerWidget {
   final DashboardTileSize? size;
+  final bool expandHeight;
 
-  const NetworkSpeed({super.key, this.size});
+  const NetworkSpeed({super.key, this.size, this.expandHeight = false});
 
   // Cache as const
   static const _initPoints = [Point(0, 0), Point(1, 0)];
@@ -172,7 +173,7 @@ class NetworkSpeed extends ConsumerWidget {
     final color = context.colorScheme.onSurfaceVariant.opacity80;
     final primaryColor = Theme.of(context).colorScheme.primary;
     return SizedBox(
-      height: getWidgetHeight(context, 2),
+      height: expandHeight ? null : getWidgetHeight(context, 2),
       child: CommonCard(
         onPressed: () => BaseNavigator.push(context, const SpeedTestPage()),
         info: Info(

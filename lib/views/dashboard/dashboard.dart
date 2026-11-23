@@ -43,6 +43,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
 
   /// 串行执行布局迁移，避免多次迁移并发读写尺寸表互相覆盖。
   Future<void> _runDashboardMigrations() async {
+    await _maybeMigrateDesktopLayout();
     await _maybeMigrateLayout();
     await _maybeForceMediaUnlockLarge();
   }
@@ -68,6 +69,48 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   }
 
   static const String _kLayoutV6 = 'app_dashboard_layout_v6';
+
+  static const String _kDesktopLayoutV7 = 'app_dashboard_layout_desktop_v7';
+
+  /// 桌面端布局迁移：按首页设计稿重排网格
+  /// （左列系统代理 / 虚拟网卡 / 内网 IP，中列网络检测长卡，
+  /// 右列启动开关长卡，底部流量统计横卡）。
+  Future<void> _maybeMigrateDesktopLayout() async {
+    if (system.isAndroid) return;
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      if (prefs == null || (prefs.getBool(_kDesktopLayoutV7) ?? false)) {
+        return;
+      }
+      final original = [..._currentWidgets()];
+      const order = [
+        DashboardWidget.systemProxyButton,
+        DashboardWidget.networkDetection,
+        DashboardWidget.startButton,
+        DashboardWidget.tunButton,
+        DashboardWidget.intranetIp,
+        DashboardWidget.trafficUsage,
+      ];
+      final remaining = <DashboardWidget, DashboardWidget>{
+        for (final item in original) item.family: item,
+      };
+      final widgets = <DashboardWidget>[];
+      for (final family in order) {
+        final found = remaining.remove(family);
+        if (found != null) widgets.add(found);
+      }
+      widgets.addAll(remaining.values);
+      final sizes = {..._currentSizes()}
+        ..['networkDetection'] = DashboardTileSize.tall.name
+        ..['startButton'] = DashboardTileSize.tall.name
+        ..['trafficUsage'] = DashboardTileSize.wide.name;
+      if (!mounted) return;
+      _saveWidgets(widgets, sizes: sizes);
+      await prefs.setBool(_kDesktopLayoutV7, true);
+    } catch (_) {
+      // 迁移失败不影响正常使用。
+    }
+  }
 
   /// 布局迁移：网络检测 / 启动开关恢复原生尺寸，并排显示
   /// （左侧网络检测信息，右侧启动开关）。
@@ -569,10 +612,6 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                               ),
                             );
                           }
-                          final cardWidth = math.min(
-                            520.0,
-                            (available - spacing * 7) / 8 * 4 + spacing * 3,
-                          );
                           // 仅当用户配置里保留了网络速度卡片时才并排展示，
                           // 避免用户把该卡片删掉后仍被动出现。
                           final showSideSpeed = children.any(
@@ -581,23 +620,42 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                                 tile.widget ==
                                     DashboardWidget.networkSpeedSmall,
                           );
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
+                          if (!showSideSpeed) {
+                            final cardWidth = math.min(
+                              640.0,
+                              (available - spacing * 7) / 8 * 4 + spacing * 3,
+                            );
+                            return Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: SizedBox(
                                 width: cardWidth,
                                 child: const AppAccountCard(),
                               ),
-                              if (showSideSpeed) ...[
+                            );
+                          }
+                          // 账户卡与网络速度卡等宽等高并排：各占一半宽度，
+                          // 高度由账户卡内容决定，网速卡拉伸到同高。
+                          final cardWidth = math.min(
+                            640.0,
+                            (available - spacing) / 2,
+                          );
+                          return IntrinsicHeight(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: const AppAccountCard(),
+                                ),
                                 SizedBox(width: spacing),
-                                Expanded(
-                                  child: SizedBox(
-                                    height: getWidgetHeight(context, 3),
-                                    child: const NetworkSpeed(),
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: const NetworkSpeed(
+                                    expandHeight: true,
                                   ),
                                 ),
                               ],
-                            ],
+                            ),
                           );
                         },
                       ),
