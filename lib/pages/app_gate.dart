@@ -207,7 +207,27 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
           ),
         ),
       );
+      _ensureSignedOutUi();
     }
+  }
+
+  /// 退出登录后强制回到根路由并刷新界面。
+  ///
+  /// 桌面端窗口层级较多，退出瞬间可能仍有页面/弹窗压在栈顶，
+  /// 或首页画面被快照缓存，导致界面停留在“退出登录”时的旧画面。
+  void _ensureSignedOutUi() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || AppAuth.instance.loggedIn) {
+        return;
+      }
+      final navigator = globalState.navigatorKey.currentState;
+      navigator?.popUntil((route) => route.isFirst);
+      setState(() {});
+    });
   }
 
   Future<void> _refreshAndSync() async {
@@ -406,6 +426,11 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
         }
         if (!AppAuth.instance.loggedIn) {
           return const LoginPage();
+        }
+        // 桌面端不使用路由快照：窗口层级与快照缓存会让退出/切换时
+        // 残留旧画面，直接返回真实页面可确保状态即时刷新。
+        if (system.isDesktop) {
+          return const HomePage();
         }
         return const RouteSnapshot(child: HomePage());
       },

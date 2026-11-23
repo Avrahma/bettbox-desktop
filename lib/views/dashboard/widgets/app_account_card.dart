@@ -95,7 +95,24 @@ class _AppAccountCardState extends State<AppAccountCard> {
     if (confirmed != true) {
       return;
     }
-    await AppAuth.instance.logout();
+    try {
+      await AppAuth.instance.logout();
+    } catch (e) {
+      commonPrint.warn('AppAccountCard logout failed: $e');
+      if (!mounted) {
+        return;
+      }
+      unawaited(
+        globalState.showMessage(
+          title: '提示',
+          message: const TextSpan(text: '退出登录失败，请重试'),
+          cancelable: false,
+        ),
+      );
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   /// 图标标题行，对齐应用内其它卡片的 InfoHeader 写法。

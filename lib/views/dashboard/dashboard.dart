@@ -543,7 +543,27 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const AppAccountCard(),
+                      LayoutBuilder(
+                        builder: (context, cardConstraints) {
+                          final available = cardConstraints.maxWidth;
+                          // 宽屏（桌面端）下账户卡不再铺满整行，
+                          // 收窄到约网格一半宽度并靠左对齐；窄屏保持铺满。
+                          final cardWidth = available > 720
+                              ? math.min(
+                                  520.0,
+                                  (available - spacing * 7) / 8 * 4 +
+                                      spacing * 3,
+                                )
+                              : available;
+                          return Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: SizedBox(
+                              width: cardWidth,
+                              child: const AppAccountCard(),
+                            ),
+                          );
+                        },
+                      ),
                       const SizedBox(height: 12),
                       _buildIsEdit(
                         (isEdit) => isEdit

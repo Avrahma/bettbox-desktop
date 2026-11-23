@@ -431,14 +431,20 @@ class AppAuth extends ChangeNotifier {
 
   /// 刷新账号数据。返回 false 表示登录态已失效。
   Future<bool> refresh() async {
-    if ((_token?.isEmpty ?? true)) {
+    final token = _token;
+    if (token == null || token.isEmpty) {
       return false;
     }
     try {
       final response = await _dio().get<dynamic>(
         '/api/app/profile',
-        options: Options(headers: {'Authorization': 'Bearer $_token'}),
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
+      // 请求飞行期间用户可能已退出登录或切换账号：旧响应必须丢弃，
+      // 否则会把已经清掉的登录态重新写回，表现为“退出登录退不出来”。
+      if (_token != token) {
+        return false;
+      }
       if (response.statusCode == 401) {
         return false;
       }
@@ -455,7 +461,13 @@ class AppAuth extends ChangeNotifier {
       if (ticket != null && ticket.isNotEmpty) {
         _ticket = ticket;
       }
+      if (_token != token) {
+        return false;
+      }
       await _persist();
+      if (_token != token) {
+        return false;
+      }
       notifyListeners();
       return true;
     } on DioException {
@@ -480,14 +492,29 @@ class AppAuth extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // 先清内存登录态并立即通知界面切回登录页，
+    // 避免本地存储 IO 异常或卡顿导致界面停留在首页退不出去。
     _token = null;
     _ticket = null;
     _account = null;
-    final prefs = await preferences.sharedPreferencesCompleter.future;
-    await prefs?.remove(_kToken);
-    await prefs?.remove(_kTicket);
-    await prefs?.remove(_kAccount);
     notifyListeners();
+
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future
+          .timeout(const Duration(seconds: 3), onTimeout: () => null);
+      if (prefs == null) {
+        return;
+      }
+      for (final key in const [_kToken, _kTicket, _kAccount]) {
+        try {
+          await prefs.remove(key).timeout(const Duration(seconds: 2));
+        } catch (e) {
+          commonPrint.warn('AppAuth logout remove $key failed: $e');
+        }
+      }
+    } catch (e) {
+      commonPrint.warn('AppAuth logout persist failed: $e');
+    }
   }
 
   Future<void> _persist() async {
