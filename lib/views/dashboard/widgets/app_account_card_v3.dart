@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
 import 'package:material_ui/material_ui.dart';
@@ -59,20 +60,13 @@ class _AppAccountCardState extends State<AppAccountCard> {
     );
   }
 
-  /// 打开站点的指定页面（购买 / 续费），已登录时按 ticket 免密进入。
-  Future<void> _openSite(String Function(AppAuth auth) urlOf) async {
-    var url = urlOf(AppAuth.instance);
-    if (url.isEmpty) {
-      final valid = await _ensureRefreshed();
-      if (!valid) {
-        return;
-      }
-      url = urlOf(AppAuth.instance);
-    }
-    if (url.isEmpty) {
-      return;
-    }
-    unawaited(globalState.openUrl(url));
+  /// 打开套餐中心：App 内选套餐、粘贴支付宝口令、查看订单进度。
+  void _openShop() {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ShopPage()),
+      ),
+    );
   }
 
   Future<void> _logout() async {
@@ -534,13 +528,7 @@ class _AppAccountCardState extends State<AppAccountCard> {
           Row(
             children: [
               FilledButton(
-                onPressed: () => unawaited(
-                  _openSite(
-                    (auth) => sub == null
-                        ? (auth.purchaseUrl ?? '')
-                        : (auth.renewalUrl ?? ''),
-                  ),
-                ),
+                onPressed: _openShop,
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(0, 36),
                   padding: const EdgeInsets.symmetric(horizontal: 20),

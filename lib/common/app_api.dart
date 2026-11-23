@@ -230,6 +230,143 @@ class AppAccountData {
   };
 }
 
+/// 可购买套餐（服务端 /api/app/shop 返回）。
+class AppPlan {
+  const AppPlan({
+    required this.id,
+    required this.name,
+    required this.price,
+    required this.months,
+    required this.description,
+  });
+
+  final int id;
+  final String name;
+  final double price;
+  final int months;
+  final String description;
+
+  /// 服务端用 months<=0 表示永久套餐。
+  String get periodText {
+    if (months <= 0) {
+      return '永久';
+    }
+    if (months % 12 == 0) {
+      return '${months ~/ 12} 年';
+    }
+    return '$months 个月';
+  }
+
+  /// 站点套餐详情是富文本，这里剥离标签供列表展示。
+  String get summary {
+    final text = description
+        .replaceAll(RegExp(r'<[^>]*>'), ' ')
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return text.isEmpty ? '下单后由管理员确认收款并自动分配订阅' : text;
+  }
+
+  static AppPlan fromJson(Map<String, dynamic> json) {
+    return AppPlan(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      name: json['name']?.toString() ?? '',
+      price: (json['price'] as num?)?.toDouble() ?? 0,
+      months: (json['months'] as num?)?.toInt() ?? 0,
+      description: json['description']?.toString() ?? '',
+    );
+  }
+}
+
+/// App 内订单（支付宝口令支付）。
+class AppOrder {
+  const AppOrder({
+    required this.id,
+    required this.planName,
+    required this.amount,
+    required this.status,
+    required this.statusLabel,
+    required this.alipayCode,
+    required this.createdAt,
+    required this.canClaim,
+  });
+
+  final int id;
+  final String planName;
+  final double amount;
+  final String status;
+  final String statusLabel;
+  final String alipayCode;
+  final String createdAt;
+  final bool canClaim;
+
+  bool get approved => status == 'approved';
+
+  /// 已下单但还没粘贴口令。
+  bool get waitingCode => status == 'pending' && alipayCode.isEmpty;
+
+  /// 已粘贴口令，等待管理员确认收款。
+  bool get waitingReview => status == 'pending' && alipayCode.isNotEmpty;
+
+  static AppOrder fromJson(Map<String, dynamic> json) {
+    return AppOrder(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      planName: json['plan_name']?.toString() ?? '',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      status: json['status']?.toString() ?? '',
+      statusLabel: json['status_label']?.toString() ?? '',
+      alipayCode: json['alipay_code']?.toString() ?? '',
+      createdAt: json['created_at']?.toString() ?? '',
+      canClaim: json['can_claim'] == true,
+    );
+  }
+}
+
+/// 套餐中心聚合数据：套餐、订单、站点付款说明与余额。
+class AppShopData {
+  const AppShopData({
+    required this.plans,
+    required this.orders,
+    required this.payGuide,
+    required this.balance,
+    required this.codeLimit,
+  });
+
+  final List<AppPlan> plans;
+  final List<AppOrder> orders;
+  final String payGuide;
+  final double balance;
+  final int codeLimit;
+
+  static AppShopData fromJson(Map<String, dynamic> json) {
+    final plans = <AppPlan>[];
+    final rawPlans = json['plans'];
+    if (rawPlans is List) {
+      for (final item in rawPlans) {
+        if (item is Map) {
+          plans.add(AppPlan.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
+    }
+    final orders = <AppOrder>[];
+    final rawOrders = json['orders'];
+    if (rawOrders is List) {
+      for (final item in rawOrders) {
+        if (item is Map) {
+          orders.add(AppOrder.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
+    }
+    return AppShopData(
+      plans: plans,
+      orders: orders,
+      payGuide: json['pay_guide']?.toString() ?? '',
+      balance: (json['balance'] as num?)?.toDouble() ?? 0,
+      codeLimit: (json['code_limit'] as num?)?.toInt() ?? 180,
+    );
+  }
+}
+
 class AppApiException implements Exception {
   AppApiException(this.message);
 
@@ -432,6 +569,76 @@ class AppAuth extends ChangeNotifier {
       _account = AppAccountData.fromJson(data);
       await _persist();
       notifyListeners();
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
+  /// 套餐中心数据：套餐列表、我的订单、付款说明与余额。
+  Future<AppShopData> fetchShop() async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().get<dynamic>(
+        '/api/app/shop',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppApiException(data['error']?.toString() ?? '加载失败，请稍后重试');
+      }
+      return AppShopData.fromJson(data);
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
+  /// 创建支付宝口令订单；[alipayCode] 为空表示先建单、稍后再补口令。
+  Future<AppOrder> submitOrder({required int planId, String alipayCode = ''}) {
+    return _shopOrder('/api/app/orders', {
+      'plan_id': planId,
+      'alipay_code': alipayCode,
+    });
+  }
+
+  /// 给已有待确认订单补交支付宝口令，提交后立即提醒管理员。
+  Future<AppOrder> claimOrder({
+    required int orderId,
+    required String alipayCode,
+  }) {
+    return _shopOrder('/api/app/orders/$orderId/claim', {
+      'alipay_code': alipayCode,
+    });
+  }
+
+  Future<AppOrder> _shopOrder(
+    String path,
+    Map<String, dynamic> payload,
+  ) async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().post<dynamic>(
+        path,
+        data: payload,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is Map && body['ok'] == true && body['order'] is Map) {
+        return AppOrder.fromJson(
+          Map<String, dynamic>.from(body['order'] as Map),
+        );
+      }
+      final message = body is Map ? body['error']?.toString() : null;
+      throw AppApiException(message ?? '提交失败，请稍后重试');
     } on DioException catch (e) {
       throw AppApiException(_dioMessage(e));
     }
