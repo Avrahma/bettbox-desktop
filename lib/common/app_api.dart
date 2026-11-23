@@ -245,7 +245,7 @@ class AppAuth extends ChangeNotifier {
 
   static final AppAuth instance = AppAuth._();
 
-  static const String defaultBaseUrl = 'http://39.109.58.56:9563';
+  static const String defaultBaseUrl = 'https://s.553786.xyz';
   static const String _kToken = 'app_client_token';
   static const String _kTicket = 'app_client_ticket';
   static const String _kBase = 'app_client_base';
@@ -307,7 +307,15 @@ class AppAuth extends ChangeNotifier {
       final prefs = await preferences.sharedPreferencesCompleter.future;
       final base = prefs?.getString(_kBase);
       if (base != null && base.trim().isNotEmpty) {
-        _baseUrl = _normalizeBase(base);
+        final normalized = _normalizeBase(base);
+        // 旧服务器已退役：老用户本地存的旧地址自动切到新默认地址，
+        // 避免升级后仍指向连不通的 IP。
+        if (normalized.contains('39.109.58.56')) {
+          _baseUrl = defaultBaseUrl;
+          await prefs?.setString(_kBase, defaultBaseUrl);
+        } else {
+          _baseUrl = normalized;
+        }
       }
       _token = prefs?.getString(_kToken);
       _ticket = prefs?.getString(_kTicket);
