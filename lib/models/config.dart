@@ -41,7 +41,7 @@ const defaultNetworkProps = NetworkProps();
 const defaultProxiesStyle = ProxiesStyle();
 const defaultWindowProps = WindowProps();
 const defaultAccessControl = AccessControl();
-final defaultThemeProps = ThemeProps(usePhosphorIcons: system.isAndroid);
+final defaultThemeProps = ThemeProps(usePhosphorIcons: true);
 
 const List<DashboardWidget> defaultDashboardWidgets = [
   DashboardWidget.networkSpeed,
@@ -420,7 +420,7 @@ abstract class ProxiesStyle with _$ProxiesStyle {
     int concurrencyLimit,
     @Default(false) bool autoStickyHeader,
     @Default(false) bool showHiddenItems,
-    @Default(false) bool hideTimeoutProxies,
+    @Default(true) bool hideTimeoutProxies,
     @Default(false) bool hasCustomizedStyle,
   }) = _ProxiesStyle;
 
@@ -463,7 +463,7 @@ abstract class ThemeProps with _$ThemeProps {
       final props = ThemeProps.fromJson(json);
       return json.containsKey('usePhosphorIcons')
           ? props
-          : props.copyWith(usePhosphorIcons: system.isAndroid);
+          : props.copyWith(usePhosphorIcons: true);
     } catch (_) {
       return defaultThemeProps;
     }

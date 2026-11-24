@@ -15,6 +15,9 @@ jobs:
   windows:
     name: windows-amd64
     runs-on: windows-2022
+    env:
+      WIN_PFX_BASE64: ${{ secrets.WIN_PFX_BASE64 }}
+      WIN_PFX_PASSWORD: ${{ secrets.WIN_PFX_PASSWORD }}
     steps:
       - uses: actions/checkout@v6
 
@@ -73,9 +76,49 @@ jobs:
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
+      - name: Sign app binaries
+        if: env.WIN_PFX_BASE64 != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WIN_PFX_BASE64))
+          $pw = ConvertTo-SecureString $env:WIN_PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Write-Host "cert: $($cert.Subject) thumb=$($cert.Thumbprint)"
+          Get-ChildItem build/windows -Recurse -Filter *.exe | ForEach-Object {
+            try {
+              $r = Set-AuthenticodeSignature -FilePath $_.FullName -Certificate $cert -TimestampServer 'http://timestamp.digicert.com' -HashAlgorithm SHA256
+              Write-Host ("signed {0} -> {1}" -f $_.Name, $r.Status)
+              if ($r.Status -ne 'Valid') { Write-Host $r.StatusMessage }
+            } catch { Write-Host ("sign failed {0}: {1}" -f $_.Name, $_.Exception.Message) }
+          }
+
       - name: Package installer
         shell: bash
         run: dart windows/packaging/exe/package_windows.dart --arch amd64 --env pre
+
+      - name: Sign installer and write checksums
+        if: env.WIN_PFX_BASE64 != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WIN_PFX_BASE64))
+          $pw = ConvertTo-SecureString $env:WIN_PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Get-ChildItem dist -Filter *.exe | ForEach-Object {
+            $r = Set-AuthenticodeSignature -FilePath $_.FullName -Certificate $cert -TimestampServer 'http://timestamp.digicert.com' -HashAlgorithm SHA256
+            Write-Host ("signed {0} -> {1}" -f $_.Name, $r.Status)
+          }
+          Export-Certificate -Cert $cert -FilePath dist/Appshub-CodeSigning.cer -Type CERT | Out-Null
+          $lines = @()
+          Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip' } | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            $lines += "$h  $($_.Name)"
+          }
+          $lines | Out-File -FilePath dist/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist/SHA256SUMS.txt
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
@@ -84,6 +127,8 @@ jobs:
           path: |
             dist/*.exe
             dist/*.zip
+            dist/*.cer
+            dist/SHA256SUMS.txt
           if-no-files-found: warn
           retention-days: 14
 

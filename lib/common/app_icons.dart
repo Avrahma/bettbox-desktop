@@ -338,7 +338,7 @@ class AppIconScope extends InheritedWidget {
       context
           .dependOnInheritedWidgetOfExactType<AppIconScope>()
           ?.usePhosphorIcons ??
-      false;
+      true;
 
   @override
   bool updateShouldNotify(AppIconScope oldWidget) =>
