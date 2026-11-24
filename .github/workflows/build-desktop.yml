@@ -135,6 +135,8 @@ jobs:
           retention-days: 14
 
   macos:
+    # 暂只构建 Windows 端（macOS runner 按 10 倍分钟计费）。恢复 macOS 时删除下面 if 行。
+    if: false
     name: macos-${{ matrix.arch }}
     runs-on: macos-26
     strategy:
