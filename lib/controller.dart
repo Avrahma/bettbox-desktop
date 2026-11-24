@@ -29,6 +29,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:yaml/yaml.dart';
 
+import 'common/app_visibility.dart';
 import 'common/archive.dart'
     show BackupPasswordException, decodeBackupArchive, restoreBackupFiles;
 import 'common/common.dart';
@@ -2288,6 +2289,8 @@ class AppController {
       if (pageLabel == PageLabel.profiles) profilesSlide.enter();
     }
     _ref.read(currentPageLabelProvider.notifier).value = pageLabel;
+    // 配置入口可见性由 AppVisibility 按套餐状态与用户手动覆盖决定，切页不再自动隐藏。
+    AppVisibility.instance.onPageChanged(pageLabel);
   }
 
   void reselectPage(PageLabel pageLabel) {

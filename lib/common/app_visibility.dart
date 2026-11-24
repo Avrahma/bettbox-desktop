@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/preferences.dart';
+import 'package:bett_box/enum/enum.dart';
 import 'package:flutter/foundation.dart';
 
 /// 界面元素的可见性控制：
@@ -117,6 +118,10 @@ class AppVisibility extends ChangeNotifier {
   }
 
   /// 「更多」页标题连续点击 5 次：在显示与隐藏之间切换「其他」栏。
+  /// 桌面端 controller 在切换页面时调用；同步安卓逻辑后配置入口不再自动隐藏，
+  /// 保留此方法仅为接口兼容。
+  void onPageChanged(PageLabel label) {}
+
   void tapToolsTitle() {
     final now = DateTime.now();
     final last = _toolsTapLast;
