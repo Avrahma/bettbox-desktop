@@ -85,8 +85,7 @@ jobs:
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WIN_PFX_BASE64))
           $pw = ConvertTo-SecureString $env:WIN_PFX_PASSWORD -AsPlainText -Force
           $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
-          Export-Certificate -Cert $cert -FilePath (Join-Path $env:RUNNER_TEMP 'codesign.cer') -Type CERT | Out-Null
-          Import-Certificate -FilePath (Join-Path $env:RUNNER_TEMP 'codesign.cer') -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath '.github/winsign/Appshub-RootCA.cer' -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
           Write-Host "cert: $($cert.Subject) thumb=$($cert.Thumbprint)"
           Get-ChildItem build/windows -Recurse -Filter *.exe | ForEach-Object {
             try {
@@ -109,13 +108,12 @@ jobs:
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WIN_PFX_BASE64))
           $pw = ConvertTo-SecureString $env:WIN_PFX_PASSWORD -AsPlainText -Force
           $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
-          Export-Certificate -Cert $cert -FilePath (Join-Path $env:RUNNER_TEMP 'codesign2.cer') -Type CERT | Out-Null
-          Import-Certificate -FilePath (Join-Path $env:RUNNER_TEMP 'codesign2.cer') -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath '.github/winsign/Appshub-RootCA.cer' -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
           Get-ChildItem dist -Filter *.exe | ForEach-Object {
             $r = Set-AuthenticodeSignature -FilePath $_.FullName -Certificate $cert -TimestampServer 'http://timestamp.digicert.com' -HashAlgorithm SHA256
             Write-Host ("signed {0} -> {1}" -f $_.Name, $r.Status)
           }
-          Export-Certificate -Cert $cert -FilePath dist/Appshub-CodeSigning.cer -Type CERT | Out-Null
+          Copy-Item '.github/winsign/Appshub-RootCA.cer' dist/Appshub-RootCA.cer -Force
           $lines = @()
           Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip' } | ForEach-Object {
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
