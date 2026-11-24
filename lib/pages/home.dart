@@ -96,7 +96,7 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           );
-          final navigationItems = AppVisibility.instance.showProfileEntries
+          final navigationItems = AppVisibility.instance.navProfileVisible
               ? allNavigationItems
               : allNavigationItems
                     .where((item) => item.label != PageLabel.profiles)
@@ -191,7 +191,7 @@ class _HomePageState extends State<HomePage> {
             final allItems = ref
                 .watch(currentNavigationItemsStateProvider)
                 .value;
-            final navigationItems = AppVisibility.instance.showProfileEntries
+            final navigationItems = AppVisibility.instance.navProfileVisible
                 ? allItems
                 : allItems
                       .where((item) => item.label != PageLabel.profiles)

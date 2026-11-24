@@ -891,7 +891,7 @@ class _DashboardTitleDialogState extends State<_DashboardTitleDialog> {
         child: TextField(
           controller: _controller,
           decoration: InputDecoration(
-            hintText: 'Have fun with Bettbox',
+            hintText: 'Have fun with Box PRE',
             errorText: _errorText,
             border: const OutlineInputBorder(),
           ),

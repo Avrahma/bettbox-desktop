@@ -2122,7 +2122,6 @@ class AppController {
     await updateTray(true, false, true);
 
     await _handlePreference();
-    await _handlerDisclaimer();
     if (system.isWindows) {
       unawaited(
         setProcessPriority(_ref.read(appSettingProvider).enableHighPriority)
@@ -2351,45 +2350,72 @@ class AppController {
     });
   }
 
+  static const String _agreementKeyword = '我同意';
+
   Future<bool> showDisclaimer() async {
-    return await globalState.showCommonDialog<bool>(
+    final inputController = TextEditingController();
+    var canAgree = false;
+    final result =
+        await globalState.showCommonDialog<bool>(
           dismissible: false,
-          child: CommonDialog(
-            title: appLocalizations.disclaimer,
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop<bool>(false);
-                },
-                child: Text(appLocalizations.exit),
-              ),
-              TextButton(
-                onPressed: () {
-                  _ref
-                      .read(appSettingProvider.notifier)
-                      .updateState(
-                        (state) => state.copyWith(disclaimerAccepted: true),
-                      );
-                  Navigator.of(context).pop<bool>(true);
-                },
-                child: Text(appLocalizations.agree),
-              ),
-            ],
-            child: SelectableText(appLocalizations.disclaimerDesc),
+          child: StatefulBuilder(
+            builder: (dialogContext, setState) {
+              return CommonDialog(
+                title: appLocalizations.disclaimer,
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop<bool>(false);
+                    },
+                    child: Text(appLocalizations.exit),
+                  ),
+                  TextButton(
+                    onPressed: canAgree
+                        ? () {
+                            _ref
+                                .read(appSettingProvider.notifier)
+                                .updateState(
+                                  (state) => state.copyWith(
+                                    disclaimerAccepted: true,
+                                  ),
+                                );
+                            Navigator.of(dialogContext).pop<bool>(true);
+                          }
+                        : null,
+                    child: Text(appLocalizations.agree),
+                  ),
+                ],
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SelectableText(appLocalizations.disclaimerDesc),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: inputController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                        hintText: '请在此输入：我同意',
+                      ),
+                      onChanged: (value) {
+                        final ok =
+                            value.replaceAll(' ', '').trim() ==
+                            _agreementKeyword;
+                        if (ok != canAgree) {
+                          setState(() => canAgree = ok);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ) ??
         false;
-  }
-
-  Future<void> _handlerDisclaimer() async {
-    if (_ref.read(appSettingProvider).disclaimerAccepted) {
-      return;
-    }
-    final isDisclaimerAccepted = await showDisclaimer();
-    if (!isDisclaimerAccepted) {
-      await handleExit();
-    }
-    return;
+    inputController.dispose();
+    return result;
   }
 
   Future<void> addProfileFormURL(String url, {String? ageSecretKey}) async {

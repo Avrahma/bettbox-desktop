@@ -526,7 +526,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "disabled": MessageLookupByLibrary.simpleMessage("已關閉"),
     "disclaimer": MessageLookupByLibrary.simpleMessage("免責聲明"),
     "disclaimerDesc": MessageLookupByLibrary.simpleMessage(
-      "本軟體為開源免費軟體，僅供學習交流等非商業性質的個人測試使用，代理服務商的行為均與本軟體無關，同意聲明代表您已完全知曉並確認了這一點，如不同意，請選擇退出！",
+      "本軟體僅供學習交流等正規電商使用，使用遇到的問題與行為均與本軟體無關，同意聲明代表您已完全知曉並確認了這一點，如不同意，請選擇退出！",
     ),
     "discoverNewVersion": MessageLookupByLibrary.simpleMessage("發現新版本"),
     "discovery": MessageLookupByLibrary.simpleMessage("發現新版本"),

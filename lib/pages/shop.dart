@@ -15,16 +15,171 @@ class ShopPage extends StatefulWidget {
   State<ShopPage> createState() => _ShopPageState();
 }
 
-class _ShopPageState extends State<ShopPage> {
+/// 套餐分类：选项卡顺序固定为 年付 → 定制 → 月付。
+enum _PlanCategory {
+  yearly('年付'),
+  custom('定制'),
+  monthly('月付');
+
+  const _PlanCategory(this.label);
+
+  final String label;
+}
+
+/// 按名称与周期归类套餐：「定制」优先判断，其次按周期区分年付与月付。
+_PlanCategory _categoryOfPlan(AppPlan plan) {
+  final text = '${plan.tierLabel}${plan.name}';
+  if (text.contains('定制') ||
+      text.contains('专属') ||
+      text.contains('私人') ||
+      text.contains('家宽')) {
+    return _PlanCategory.custom;
+  }
+  if (plan.months <= 0 || plan.months % 12 == 0) {
+    return _PlanCategory.yearly;
+  }
+  if (text.contains('年付') || text.contains('包年') || text.contains('年度')) {
+    return _PlanCategory.yearly;
+  }
+  return _PlanCategory.monthly;
+}
+
+class _ShopPageState extends State<ShopPage>
+    with SingleTickerProviderStateMixin {
   AppShopData? _data;
   String? _error;
   bool _loading = true;
   int? _buyingPlanId;
 
+  /// 套餐分类选项卡：年付 → 定制 → 月付。
+  late final TabController _tabController = TabController(
+    length: _PlanCategory.values.length,
+    vsync: this,
+  )..addListener(_onTabChanged);
+
+  void _onTabChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  void dispose() {
+    _tabController
+      ..removeListener(_onTabChanged)
+      ..dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
     unawaited(_load());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_showWelcomeNotice());
+      }
+    });
+  }
+
+  /// 进入套餐中心时的公告弹窗（同机场公告弹窗风格）。
+  Future<void> _showWelcomeNotice() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+        final colorScheme = theme.colorScheme;
+        const notices = <String>[
+          '全站仅支持余额支付，余额通过支付宝口令红包充值，管理员确认到账后余额自动更新。',
+          '余额充足即可下单，购买成功后订阅自动下发到配置页，无需手动导入。',
+          '套餐为虚拟商品，开通后不支持退款，请确认周期与线路后再购买。',
+          '家宽网络等定制类套餐按定制周期交付，具体以客服确认为准。',
+        ];
+        return AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+          titlePadding: const EdgeInsets.fromLTRB(22, 20, 22, 0),
+          contentPadding: const EdgeInsets.fromLTRB(22, 14, 22, 0),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+          title: Row(
+            children: [
+              Icon(Icons.campaign_outlined, color: colorScheme.primary),
+              const SizedBox(width: 8),
+              Text('购买须知', style: theme.textTheme.titleMedium),
+            ],
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < notices.length; i++) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${i + 1}.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            notices[i],
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                              height: 1.55,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (i != notices.length - 1) const SizedBox(height: 10),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('我知道了'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  List<AppPlan> _plansIn(int tabIndex, List<AppPlan> plans) {
+    final category = _PlanCategory.values[
+        tabIndex.clamp(0, _PlanCategory.values.length - 1)];
+    final result =
+        plans.where((plan) => _categoryOfPlan(plan) == category).toList()
+          ..sort((a, b) => a.price.compareTo(b.price));
+    return result;
+  }
+
+  List<Widget> _buildPlanTiles(AppShopData data) {
+    final plans = _plansIn(_tabController.index, data.plans);
+    if (plans.isEmpty) {
+      return const [_EmptyHint(text: '该分类暂无可购买套餐，看看其它分类或联系客服')];
+    }
+    return [
+      for (final plan in plans) ...[
+        _PlanCard(
+          plan: plan,
+          balance: data.balance,
+          busy: _buyingPlanId != null,
+          onBuy: () => unawaited(_buy(plan)),
+        ),
+        const SizedBox(height: 10),
+      ],
+    ];
   }
 
   Future<void> _load() async {
@@ -242,19 +397,14 @@ class _ShopPageState extends State<ShopPage> {
                     ),
                     const SizedBox(height: 18),
                     _SectionTitle(title: '选择套餐'),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 10),
                     if ((data?.plans ?? const <AppPlan>[]).isEmpty)
                       _EmptyHint(text: '暂无可购买套餐，请联系客服')
-                    else
-                      for (final plan in data!.plans) ...[
-                        _PlanCard(
-                          plan: plan,
-                          balance: data.balance,
-                          busy: _buyingPlanId != null,
-                          onBuy: () => unawaited(_buy(plan)),
-                        ),
-                        const SizedBox(height: 10),
-                      ],
+                    else ...[
+                      _PlanTabBar(controller: _tabController),
+                      const SizedBox(height: 12),
+                      ..._buildPlanTiles(data!),
+                    ],
                     const SizedBox(height: 18),
                     _SectionTitle(title: '我的订单'),
                     const SizedBox(height: 6),
@@ -277,6 +427,58 @@ class _ShopPageState extends State<ShopPage> {
                   ],
                 ),
               ),
+      ),
+    );
+  }
+}
+
+/// 套餐分类选项卡：年付套餐 / 定制套餐 / 月付套餐。
+class _PlanTabBar extends StatelessWidget {
+  const _PlanTabBar({required this.controller});
+
+  final TabController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: TabBar(
+        controller: controller,
+        indicator: BoxDecoration(
+          color: colorScheme.primary,
+          borderRadius: BorderRadius.circular(9),
+        ),
+        indicatorSize: TabBarIndicatorSize.tab,
+        indicatorPadding: EdgeInsets.zero,
+        dividerColor: Colors.transparent,
+        splashBorderRadius: BorderRadius.circular(9),
+        overlayColor: WidgetStatePropertyAll(
+          colorScheme.primary.withValues(alpha: 0.08),
+        ),
+        labelColor: colorScheme.onPrimary,
+        unselectedLabelColor: colorScheme.onSurfaceVariant,
+        labelStyle: theme.textTheme.labelLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+        ),
+        unselectedLabelStyle: theme.textTheme.labelLarge,
+        labelPadding: EdgeInsets.zero,
+        tabs: [
+          for (final category in _PlanCategory.values)
+            Tab(
+              height: 34,
+              child: Text(
+                '${category.label}套餐',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
       ),
     );
   }

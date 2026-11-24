@@ -524,7 +524,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "disabled": MessageLookupByLibrary.simpleMessage("已关闭"),
     "disclaimer": MessageLookupByLibrary.simpleMessage("免责声明"),
     "disclaimerDesc": MessageLookupByLibrary.simpleMessage(
-      "本软件为开源免费软件，仅供学习交流等非商业性质的个人测试使用，代理服务商的行为均与本软件无关，同意声明代表您已完全知晓并确认了这一点，如不同意，请选择退出！",
+      "本软件仅供学习交流等正规电商使用，使用遇到的问题与行为均与本软件无关，同意声明代表您已完全知晓并确认了这一点，如不同意，请选择退出！",
     ),
     "discoverNewVersion": MessageLookupByLibrary.simpleMessage("发现新版本"),
     "discovery": MessageLookupByLibrary.simpleMessage("发现新版本"),

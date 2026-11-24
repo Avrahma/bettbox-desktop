@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../common/app_api.dart';
 import 'register.dart';
+import 'package:bett_box/state.dart';
 
 /// 机场账号登录页，作为应用首屏。
 class LoginPage extends StatefulWidget {
@@ -28,6 +29,9 @@ class _LoginPageState extends State<LoginPage> {
   void initState() {
     super.initState();
     unawaited(_probeServer());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_showDisclaimer());
+    });
     final account = AppAuth.instance.account?.account.email ?? '';
     if (account.isNotEmpty) {
       _accountController.text = account;
@@ -40,6 +44,18 @@ class _LoginPageState extends State<LoginPage> {
     _passwordController.dispose();
     _passwordFocus.dispose();
     super.dispose();
+  }
+
+  /// 安装后首次打开、以及退出登录后回到本页时，都先显示免责声明。
+  /// 必须输入「我同意」才能继续，不同意则退出应用。
+  Future<void> _showDisclaimer() async {
+    if (!mounted) {
+      return;
+    }
+    final accepted = await globalState.appController.showDisclaimer();
+    if (!accepted && mounted) {
+      await globalState.appController.handleExit();
+    }
   }
 
   Future<void> _probeServer() async {
@@ -235,7 +251,7 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '登录后自动导入订阅',
+                    '让每一次连接都简单、稳定',
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,

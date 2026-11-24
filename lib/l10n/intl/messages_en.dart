@@ -698,7 +698,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "disabled": MessageLookupByLibrary.simpleMessage("Disabled"),
     "disclaimer": MessageLookupByLibrary.simpleMessage("Disclaimer"),
     "disclaimerDesc": MessageLookupByLibrary.simpleMessage(
-      "This free open-source software is for non-commercial learning and personal use only. Proxy services are independent of this software. By agreeing, you acknowledge this; otherwise, please exit.",
+      "This software is intended only for study, exchange and other legitimate e-commerce use. Any problems or conduct encountered while using it are unrelated to this software. By agreeing, you confirm that you fully understand and acknowledge this; otherwise, please exit.",
     ),
     "discoverNewVersion": MessageLookupByLibrary.simpleMessage(
       "New Version Available",

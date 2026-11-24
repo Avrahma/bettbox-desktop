@@ -672,6 +672,21 @@ class GlobalState {
     }
     await prefs?.remove(customSidebarIconKey);
 
+    // 定制：代理页默认开启“隐藏失效节点”，老配置一次性迁移。
+    const hideTimeoutProxiesKey = 'app_custom_hide_timeout_proxies_v1';
+    if (prefs != null && !(prefs.getBool(hideTimeoutProxiesKey) ?? false)) {
+      if (!config.proxiesStyle.hideTimeoutProxies) {
+        config = config.copyWith(
+          proxiesStyle: config.proxiesStyle.copyWith(
+            hideTimeoutProxies: true,
+          ),
+        );
+        await preferences.saveConfig(config);
+        this.config = config;
+      }
+      await prefs.setBool(hideTimeoutProxiesKey, true);
+    }
+
     final synced = config.managedProps.syncedVersion;
     if (synced != null && !ManagedScript.isCustom(config.managedProps)) {
       await ManagedScript.restore();

@@ -46,6 +46,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
   void dispose() {
     _retryTimer?.cancel();
     _emptySubTimer?.cancel();
+    _planRefreshTimer?.cancel();
     for (final timer in _resumeTimers) {
       timer.cancel();
     }
@@ -96,6 +97,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
     _ownerKey = _currentOwnerKey();
     setState(() => _ready = true);
     if (_wasLoggedIn) {
+      _startPlanRefreshLoop();
       unawaited(_refreshAndSync());
     } else {
       // 未登录也必须清空上一账户残留的订阅配置。
@@ -163,6 +165,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       final subscriptionChanged = signature != _subscriptionSignature;
       _wasLoggedIn = true;
       _ownerKey = key;
+      _startPlanRefreshLoop();
       if (switchedAccount) {
         // 直接切换账户（未先退出登录）：先按上一个账户清掉其配置，
         // 避免新账户登录后仍能看到上一个账户的代理线路。
@@ -230,7 +233,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _refreshAndSync() async {
+  Future<void> _refreshAndSync({bool forceProfileRefresh = false}) async {
     if (_refreshing || !AppAuth.instance.loggedIn) {
       return;
     }
@@ -250,13 +253,16 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
     } finally {
       _refreshing = false;
     }
-    await _syncProfile();
+    await _syncProfile(forceProfileRefresh: forceProfileRefresh);
   }
 
   /// 把账号当前生效的订阅导入为配置并启用，同时清除其他账户的订阅。
-  Future<void> _syncProfile() async {
+  Future<void> _syncProfile({bool forceProfileRefresh = false}) async {
     if (_syncing) {
       _syncPending = true;
+      if (forceProfileRefresh) {
+        _forceProfileRefreshPending = true;
+      }
       return;
     }
     _syncing = true;
@@ -265,7 +271,9 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
         _syncPending = false;
         bool ok;
         try {
-          ok = await _syncProfileOnce();
+          ok = await _syncProfileOnce(
+            forceProfileRefresh: forceProfileRefresh,
+          );
         } catch (e) {
           commonPrint.warn('AppGate sync failed: $e');
           ok = false;
@@ -282,7 +290,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
   }
 
   /// 执行一次完整同步，返回是否无需再重试。
-  Future<bool> _syncProfileOnce() async {
+  Future<bool> _syncProfileOnce({bool forceProfileRefresh = false}) async {
     await _waitAppReady();
     if (!AppAuth.instance.loggedIn) {
       return true;
@@ -341,6 +349,10 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       _emptySubRound = 0;
       await AppSubscriptionGuard.instance.recordOwner(existing.id, owner);
       await globalState.appController.addProfile(existing, activate: true);
+      // 已购套餐用户：每次冷启动强制更新一次，运行期每 2 小时更新一次。
+      final force = _forceProfileRefreshPending || forceProfileRefresh;
+      _forceProfileRefreshPending = false;
+      unawaited(_autoRefreshPlanProfile(existing, force: force));
       return true;
     }
     Object? lastError;
@@ -361,6 +373,8 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
         await AppSubscriptionGuard.instance.recordOwner(profile.id, owner);
         _emptySubTimer?.cancel();
         _emptySubRound = 0;
+        // 新导入的订阅本身就是最新内容，无需再强制刷新。
+        _forceProfileRefreshPending = false;
         return true;
       } catch (e) {
         lastError = e;
@@ -370,6 +384,124 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
     commonPrint.warn('AppGate sync profile failed: $lastError');
     _scheduleRetry();
     return false;
+  }
+
+  /// 订阅自动刷新策略：每次重新打开软件强制更新一次；平时运行中每 2 小时
+  /// 更新一次（后台返回同样按 2 小时节流），避免触发上游风控。
+  static const Duration _planRefreshInterval = Duration(hours: 2);
+  static const Duration _planRefreshRetryDelay = Duration(minutes: 5);
+  static const String _kPlanRefreshTs = 'app_plan_profile_last_refresh_ts';
+  static const String _kPlanRefreshUrl = 'app_plan_profile_last_refresh_url';
+
+  int? _planRefreshTs;
+  String? _planRefreshUrl;
+  DateTime? _planRefreshBlockedUntil;
+  bool _planRefreshInFlight = false;
+
+  /// 冷启动首次同步必须强制刷新配置（每次重新打开软件都更新一次）。
+  bool _forceProfileRefreshPending = true;
+  Timer? _planRefreshTimer;
+
+  /// 运行期每 2 小时自动更新一次订阅配置。
+  void _startPlanRefreshLoop() {
+    _planRefreshTimer?.cancel();
+    _planRefreshTimer = Timer.periodic(_planRefreshInterval, (_) {
+      if (!mounted || !AppAuth.instance.loggedIn) {
+        return;
+      }
+      unawaited(_refreshAndSync(forceProfileRefresh: true));
+    });
+  }
+
+  /// 已购套餐账户自动刷新配置内容（节点/规则变更带来生效）。
+  Future<void> _autoRefreshPlanProfile(
+    Profile profile, {
+    required bool force,
+  }) async {
+    if (!AppAuth.instance.loggedIn || _planRefreshInFlight) {
+      return;
+    }
+    final sub = AppAuth.instance.subscription;
+    if (sub == null || sub.expired || sub.subUrl.trim().isEmpty) {
+      return;
+    }
+    final url = sub.subUrl.trim();
+    if (!await _shouldAutoRefreshProfile(url, force: force)) {
+      return;
+    }
+    _planRefreshInFlight = true;
+    final owner = _currentOwnerKey();
+    try {
+      await globalState.appController.updateProfile(
+        profile,
+        applyUnchanged: false,
+      );
+      await _recordPlanRefresh(url);
+    } catch (e) {
+      commonPrint.warn('AppGate auto refresh profile failed: $e');
+      _planRefreshBlockedUntil = DateTime.now().add(_planRefreshRetryDelay);
+      return;
+    } finally {
+      _planRefreshInFlight = false;
+    }
+    if (!AppAuth.instance.loggedIn || _currentOwnerKey() != owner) {
+      return;
+    }
+    // 保留原配置名称，避免被订阅文件名覆盖。
+    final label = profile.label;
+    if (label == null || label.trim().isEmpty) {
+      return;
+    }
+    for (final item in globalState.config.profiles) {
+      if (item.id == profile.id && item.label != label) {
+        globalState.appController.setProfile(item.copyWith(label: label));
+        break;
+      }
+    }
+  }
+
+  /// 是否允许本次自动刷新：非强制刷新时同一订阅 [_planRefreshInterval] 内
+  /// 只拉一次；失败后 [_planRefreshRetryDelay] 内不再重试。
+  Future<bool> _shouldAutoRefreshProfile(
+    String url, {
+    required bool force,
+  }) async {
+    final now = DateTime.now();
+    final blockedUntil = _planRefreshBlockedUntil;
+    if (blockedUntil != null && now.isBefore(blockedUntil)) {
+      return false;
+    }
+    if (_planRefreshTs == null) {
+      try {
+        final prefs = await preferences.sharedPreferencesCompleter.future;
+        _planRefreshTs = prefs?.getInt(_kPlanRefreshTs);
+        _planRefreshUrl = prefs?.getString(_kPlanRefreshUrl);
+      } catch (_) {
+        // 读取失败时按未刷新处理。
+      }
+    }
+    final ts = _planRefreshTs;
+    if (!force && ts != null && _planRefreshUrl == url) {
+      final last = DateTime.fromMillisecondsSinceEpoch(ts);
+      if (now.difference(last) < _planRefreshInterval) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<void> _recordPlanRefresh(String url) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _planRefreshTs = ts;
+    _planRefreshUrl = url;
+    _planRefreshBlockedUntil = null;
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      await prefs?.setInt(_kPlanRefreshTs, ts);
+      await prefs?.setString(_kPlanRefreshUrl, url);
+    } catch (_) {
+      // 忽略持久化失败。
+    }
   }
 
   /// 导入失败（如订阅尚未生成、网络抖动）时稍后重试。
