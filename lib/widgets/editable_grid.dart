@@ -65,17 +65,21 @@ class _EditableGridState<T extends Object> extends State<EditableGrid<T>>
   );
   DateTime _lastMove = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// 桌面端不做全屏抖动动画：持续重绘会明显卡顿，
+  /// 且鼠标场景下按钮本身已足够表达编辑态。
+  bool get _enableShake => !system.isDesktop;
+
   @override
   void initState() {
     super.initState();
-    if (widget.editing) _shake.repeat(reverse: true);
+    if (widget.editing && _enableShake) _shake.repeat(reverse: true);
   }
 
   @override
   void didUpdateWidget(EditableGrid<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.editing == widget.editing) return;
-    if (widget.editing) {
+    if (widget.editing && _enableShake) {
       _shake.repeat(reverse: true);
     } else {
       _shake.stop();
@@ -150,7 +154,7 @@ class _EditableGridState<T extends Object> extends State<EditableGrid<T>>
                 widget.crossAxisCount,
               ),
               mainAxisCellCount: widget.mainAxisCellCountOf?.call(item),
-              child: widget.editing
+              child: widget.editing && !system.isDesktop
                   ? _FlipTile(
                       gridKey: _gridKey,
                       child: _buildTile(context, item, index),
@@ -338,14 +342,16 @@ class _EditTile<T extends Object> extends StatelessWidget {
           ),
       ],
     );
-    final jiggle = AnimatedBuilder(
-      animation: shake,
-      builder: (_, child) => Transform.rotate(
-        angle: math.sin(shake.value * math.pi + phase) * 0.012 / cells,
-        child: child,
-      ),
-      child: decorated,
-    );
+    final jiggle = system.isDesktop
+        ? decorated
+        : AnimatedBuilder(
+            animation: shake,
+            builder: (_, child) => Transform.rotate(
+              angle: math.sin(shake.value * math.pi + phase) * 0.012 / cells,
+              child: child,
+            ),
+            child: decorated,
+          );
     final onMove = this.onMove;
     if (onMove == null || isTv) return jiggle;
     final target = DragTarget<T>(
@@ -372,9 +378,12 @@ class _EditTile<T extends Object> extends StatelessWidget {
       },
     );
     final placeholder = Opacity(opacity: 0.3, child: content);
+    // 桌面端同样使用长按拖拽：Draggable 的立即识别手势会抢走
+    // 删除/缩放按钮的点击，导致「点删除没反应」。
     return system.isDesktop
-        ? Draggable<T>(
+        ? LongPressDraggable<T>(
             data: item,
+            delay: const Duration(milliseconds: 200),
             feedback: feedback,
             childWhenDragging: placeholder,
             child: target,

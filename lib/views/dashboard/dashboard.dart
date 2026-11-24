@@ -43,9 +43,27 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
 
   /// 串行执行布局迁移，避免多次迁移并发读写尺寸表互相覆盖。
   Future<void> _runDashboardMigrations() async {
+    await _maybeNormalizeStoredWidgets();
     await _maybeMigrateDesktopLayout();
     await _maybeMigrateLayout();
     await _maybeForceMediaUnlockLarge();
+  }
+
+  /// 清理历史版本遗留的重复组件（同族多份 / 重复启动开关），
+  /// 这类脏数据会导致删除失效、编辑时点击卡顿。
+  Future<void> _maybeNormalizeStoredWidgets() async {
+    try {
+      final setting = ref.read(appSettingProvider);
+      final raw = system.isAndroid
+          ? setting.mobileDashboardWidgets
+          : setting.desktopDashboardWidgets;
+      final normalized = _normalizeWidgets(raw);
+      if (normalized.length == raw.length) return;
+      if (!mounted) return;
+      _saveWidgets(normalized);
+    } catch (_) {
+      // 清理失败不影响使用。
+    }
   }
 
   /// 连通性测试（媒体解锁）始终恢复为原版整行尺寸（幂等，每次启动校正）。
@@ -189,8 +207,30 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
     ];
   }
 
-  List<DashboardWidget> _currentWidgets() =>
-      ref.read(dashboardStateProvider).dashboardWidgets;
+  /// 按 family 去重：同一组件族只保留一个变体，
+  /// 避免保存后出现重复 key 导致删除失灵 / 布局错乱。
+  List<DashboardWidget> _normalizeWidgets(
+    Iterable<DashboardWidget> items,
+  ) {
+    final seen = <Object>{};
+    return [
+      for (final item in items)
+        if (seen.add(item.family)) item,
+    ];
+  }
+
+  /// 持久化的组件列表。
+  ///
+  /// 不能直接用 dashboardStateProvider.dashboardWidgets：当 showStartSwitch
+  /// 开启时会动态追加「启动开关」，写回配置会造成重复项，
+  /// 表现为删除后重启又出现。
+  List<DashboardWidget> _currentWidgets() {
+    final setting = ref.read(appSettingProvider);
+    final raw = system.isAndroid
+        ? setting.mobileDashboardWidgets
+        : setting.desktopDashboardWidgets;
+    return _normalizeWidgets(raw);
+  }
 
   Map<String, String> _currentSizes() => ref.read(
     appSettingProvider.select(
@@ -204,18 +244,19 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
     List<DashboardWidget> dashboardWidgets, {
     Map<String, String>? sizes,
   }) {
+    final widgets = _normalizeWidgets(dashboardWidgets);
     ref
         .read(appSettingProvider.notifier)
         .updateState(
           (state) => system.isAndroid
               ? state.copyWith(
-                  mobileDashboardWidgets: dashboardWidgets,
-                  dashboardWidgets: dashboardWidgets,
+                  mobileDashboardWidgets: widgets,
+                  dashboardWidgets: widgets,
                   mobileDashboardSizes: sizes ?? state.mobileDashboardSizes,
                 )
               : state.copyWith(
-                  desktopDashboardWidgets: dashboardWidgets,
-                  dashboardWidgets: dashboardWidgets,
+                  desktopDashboardWidgets: widgets,
+                  dashboardWidgets: widgets,
                   desktopDashboardSizes: sizes ?? state.desktopDashboardSizes,
                 ),
         );
@@ -230,24 +271,47 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
     final widget = tile.widget.variantFor(next);
     final nextSizes = _sizesWithout(widget);
     if (widget.nativeSize != next) nextSizes[widget.family.name] = next.name;
+    final widgets = _currentWidgets();
+    final index = widgets.indexWhere(
+      (item) => item.family == widget.family,
+    );
+    // 动态追加的启动开关不在持久化列表里，先落盘再加尺寸。
+    if (index < 0) {
+      _saveWidgets([...widgets, widget], sizes: nextSizes);
+      return;
+    }
     _saveWidgets([
-      for (final item in _currentWidgets()) item == tile.widget ? widget : item,
+      for (final item in widgets)
+        item.family == widget.family ? widget : item,
     ], sizes: nextSizes);
   }
 
   void _deleteWidget(DashboardTile tile) {
+    final family = tile.widget.family;
+    // 按 family 删除：同族不同尺寸的变体一并移除，
+    // 否则残留下的变体会让用户觉得「删不掉」。
     _saveWidgets([
       for (final item in _currentWidgets())
-        if (item != tile.widget) item,
+        if (item.family != family) item,
     ], sizes: _sizesWithout(tile.widget));
   }
 
   void _moveWidget(DashboardTile from, DashboardTile to) {
     final widgets = [..._currentWidgets()];
-    final source = widgets.indexOf(from.widget);
-    final target = widgets.indexOf(to.widget);
-    if (source < 0 || target < 0 || source == target) return;
-    widgets.insert(target, widgets.removeAt(source));
+    final source = widgets.indexWhere(
+      (item) => item.family == from.widget.family,
+    );
+    if (source < 0) return;
+    final target = widgets.indexWhere(
+      (item) => item.family == to.widget.family,
+    );
+    if (source == target) return;
+    final moved = widgets.removeAt(source);
+    if (target < 0 || target >= widgets.length) {
+      widgets.add(moved);
+    } else {
+      widgets.insert(target, moved);
+    }
     _saveWidgets(widgets);
   }
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/pages/recharge.dart';
@@ -164,22 +165,57 @@ class _ShopPageState extends State<ShopPage>
     return result;
   }
 
-  List<Widget> _buildPlanTiles(AppShopData data) {
+  /// 套餐横向排列：按可用宽度自适应 3/2/1 列，同排卡片等高。
+  Widget _buildPlanTiles(AppShopData data) {
     final plans = _plansIn(_tabController.index, data.plans);
     if (plans.isEmpty) {
-      return const [_EmptyHint(text: '该分类暂无可购买套餐，看看其它分类或联系客服')];
+      return const _EmptyHint(text: '该分类暂无可购买套餐，看看其它分类或联系客服');
     }
-    return [
-      for (final plan in plans) ...[
-        _PlanCard(
-          plan: plan,
-          balance: data.balance,
-          busy: _buyingPlanId != null,
-          onBuy: () => unawaited(_buy(plan)),
-        ),
-        const SizedBox(height: 10),
-      ],
-    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxWidth = constraints.maxWidth;
+        final columns = maxWidth >= 960
+            ? 3
+            : maxWidth >= 620
+            ? 2
+            : 1;
+        const spacing = 10.0;
+        final tileWidth = (maxWidth - spacing * (columns - 1)) / columns;
+        final children = <Widget>[];
+        for (var start = 0; start < plans.length; start += columns) {
+          final chunk = plans.sublist(
+            start,
+            math.min(start + columns, plans.length),
+          );
+          if (start > 0) children.add(const SizedBox(height: spacing));
+          children.add(
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < chunk.length; i++) ...[
+                    if (i > 0) const SizedBox(width: spacing),
+                    SizedBox(
+                      width: tileWidth,
+                      child: _PlanCard(
+                        plan: chunk[i],
+                        balance: data.balance,
+                        busy: _buyingPlanId != null,
+                        onBuy: () => unawaited(_buy(chunk[i])),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        );
+      },
+    );
   }
 
   Future<void> _load() async {
@@ -403,7 +439,7 @@ class _ShopPageState extends State<ShopPage>
                     else ...[
                       _PlanTabBar(controller: _tabController),
                       const SizedBox(height: 12),
-                      ..._buildPlanTiles(data!),
+                      _buildPlanTiles(data!),
                     ],
                     const SizedBox(height: 18),
                     _SectionTitle(title: '我的订单'),

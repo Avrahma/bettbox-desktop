@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'package:bett_box/clash/clash.dart';
 import 'package:bett_box/enum/enum.dart';
 import 'package:bett_box/models/models.dart';
+import 'package:material_ui/material_ui.dart' show ThemeMode;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:shared_preferences_platform_interface/types.dart';
@@ -168,6 +169,10 @@ class Preferences {
     }
 
     if (selected != null) {
+      selected = await _applyDefaultDarkTheme(preferences, selected);
+    }
+
+    if (selected != null) {
       await _syncFlag(
         preferences,
         'autoLaunch',
@@ -183,6 +188,31 @@ class Preferences {
     }
 
     return selected;
+  }
+
+  /// 一次性把主题默认值切到深色（老配置里存的是 system/light 也能生效）。
+  Future<Config> _applyDefaultDarkTheme(
+    SharedPreferences? preferences,
+    Config config,
+  ) async {
+    const key = 'theme_dark_default_v1';
+    if (preferences == null || (preferences.getBool(key) ?? false)) {
+      return config;
+    }
+    try {
+      final theme = config.themeProps;
+      if (theme.themeMode != ThemeMode.dark) {
+        final next = config.copyWith(
+          themeProps: theme.copyWith(themeMode: ThemeMode.dark),
+        );
+        await preferences.setBool(key, true);
+        return next;
+      }
+      await preferences.setBool(key, true);
+    } catch (e) {
+      commonPrint.warn('Failed to migrate default dark theme: $e');
+    }
+    return config;
   }
 
   Future<bool> saveConfig(Config config) {
