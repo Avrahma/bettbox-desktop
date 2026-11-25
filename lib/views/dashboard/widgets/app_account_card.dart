@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
+import 'package:bett_box/common/app_notice.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/pages/notice.dart';
 import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
@@ -30,6 +32,48 @@ class AppAccountCard extends StatefulWidget {
 class _AppAccountCardState extends State<AppAccountCard> {
   bool _refreshing = false;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_autoShowNotice());
+    });
+  }
+
+  /// 有新公告时自动弹窗（同「购买须知」形式），关闭后记为已读。
+  Future<void> _autoShowNotice() async {
+    await AppNoticeCenter.instance.refresh();
+    if (!mounted) {
+      return;
+    }
+    if (!AppNoticeCenter.instance.hasUnread) {
+      return;
+    }
+    await showAppNoticeDialog(context);
+    await AppNoticeCenter.instance.markRead();
+  }
+
+  /// 手动点「公告」入口：拉取后弹窗展示，无公告时给出提示。
+  Future<void> _openNotice() async {
+    await AppNoticeCenter.instance.refresh();
+    if (!mounted) {
+      return;
+    }
+    final notice = AppNoticeCenter.instance.notice;
+    if (notice == null || !notice.hasNotice) {
+      await globalState.showMessage(
+        message: const TextSpan(text: '暂无公告'),
+        confirmText: '知道了',
+      );
+      return;
+    }
+    await showAppNoticeDialog(context);
+    await AppNoticeCenter.instance.markRead();
+  }
+
   Future<bool> _ensureRefreshed() async {
     final valid = await AppAuth.instance.refresh();
     if (!valid) {
@@ -43,6 +87,7 @@ class _AppAccountCardState extends State<AppAccountCard> {
       return;
     }
     setState(() => _refreshing = true);
+    unawaited(_autoShowNotice());
     final valid = await _ensureRefreshed();
     if (!mounted) {
       return;
@@ -63,9 +108,8 @@ class _AppAccountCardState extends State<AppAccountCard> {
   /// 打开套餐中心：App 内查看套餐、用余额购买并自动开通。
   void _openShop() {
     unawaited(
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const ShopPage()),
-      ),
+      Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const ShopPage())),
     );
   }
 
@@ -130,13 +174,21 @@ class _AppAccountCardState extends State<AppAccountCard> {
           AppIcon(Icons.person_outline, color: colorScheme.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              '账户',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    '账户',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                SizedBox(width: _ap(context, 14)),
+                _buildNoticeEntry(context),
+              ],
             ),
           ),
           IconButton(
@@ -171,6 +223,64 @@ class _AppAccountCardState extends State<AppAccountCard> {
             icon: const AppIcon(Icons.logout, size: 19),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 公告入口：紧跟「账户」标题，后台发布新公告时右上角显示红点。
+  Widget _buildNoticeEntry(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final unread = AppNoticeCenter.instance.hasUnread;
+    return InkWell(
+      onTap: () => unawaited(_openNotice()),
+      borderRadius: BorderRadius.circular(999),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: _ap(context, 8),
+          vertical: _ap(context, 3),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Center(
+                    child: AppIcon(
+                      Icons.campaign_outlined,
+                      size: 17,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (unread)
+                    Positioned(
+                      top: 0,
+                      right: -1,
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: colorScheme.error,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            SizedBox(width: _ap(context, 4)),
+            Text(
+              '公告',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -592,7 +702,7 @@ class _AppAccountCardState extends State<AppAccountCard> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: AppAuth.instance,
+      animation: Listenable.merge([AppAuth.instance, AppNoticeCenter.instance]),
       builder: (context, _) {
         final account = AppAuth.instance.account;
         if (account == null) {

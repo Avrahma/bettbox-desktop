@@ -36,6 +36,10 @@ _PlanCategory _categoryOfPlan(AppPlan plan) {
       text.contains('家宽')) {
     return _PlanCategory.custom;
   }
+  if (plan.days > 0) {
+    // 按天套餐属短周期，归入月付分组，避免 months=0 被误判为永久套餐。
+    return _PlanCategory.monthly;
+  }
   if (plan.months <= 0 || plan.months % 12 == 0) {
     return _PlanCategory.yearly;
   }

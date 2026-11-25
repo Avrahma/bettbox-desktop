@@ -241,6 +241,8 @@ class AppPlan {
     required this.price,
     required this.months,
     required this.description,
+    this.days = 0,
+    this.periodTextOverride = '',
     this.features = const <String>[],
     this.tierLabel = '',
   });
@@ -251,14 +253,26 @@ class AppPlan {
   final int months;
   final String description;
 
+  /// 按天套餐的有效天数（服务端新增字段，0 表示按月/永久）。
+  final int days;
+
+  /// 服务端下发的时长文案（如「1 天」「3 个月」），为空时本地按 months/days 推算。
+  final String periodTextOverride;
+
   /// 服务端从套餐富文本解析出的逐条要点（流量、设备数、节点等）。
   final List<String> features;
 
   /// 线路等级标签：普通线路 / 高级线路 / 专线 / 定制。
   final String tierLabel;
 
-  /// 服务端用 months<=0 表示永久套餐。
+  /// 服务端用 months<=0 且 days<=0 表示永久套餐；days>0 表示按天有效期。
   String get periodText {
+    if (periodTextOverride.isNotEmpty) {
+      return periodTextOverride;
+    }
+    if (days > 0) {
+      return '$days 天';
+    }
     if (months <= 0) {
       return '永久';
     }
@@ -270,7 +284,7 @@ class AppPlan {
 
   /// 折合每月价格，用于长期套餐的性价比提示。
   String get monthlyHint {
-    if (months <= 1 || price <= 0) {
+    if (days > 0 || months <= 1 || price <= 0) {
       return '';
     }
     final per = price / months;
@@ -311,6 +325,8 @@ class AppPlan {
       name: json['name']?.toString() ?? '',
       price: (json['price'] as num?)?.toDouble() ?? 0,
       months: (json['months'] as num?)?.toInt() ?? 0,
+      days: (json['days'] as num?)?.toInt() ?? 0,
+      periodTextOverride: json['period_text']?.toString() ?? '',
       description: json['description']?.toString() ?? '',
       features: features,
       tierLabel: json['tier_label']?.toString() ?? '',
@@ -371,6 +387,8 @@ class AppRenewal {
     required this.planName,
     required this.price,
     required this.months,
+    this.days = 0,
+    this.periodTextOverride = '',
     required this.expiresOn,
     required this.newExpiresOn,
     required this.daysLeft,
@@ -383,14 +401,22 @@ class AppRenewal {
   final String planName;
   final double price;
   final int months;
+  final int days;
+  final String periodTextOverride;
   final String expiresOn;
   final String newExpiresOn;
   final int daysLeft;
   final bool expired;
   final bool permanent;
 
-  /// 续费周期文案：1 个月 / 3 个月 / 1 年；months<=0 视为永久。
+  /// 续费周期文案：1 天 / 1 个月 / 3 个月 / 1 年；months<=0 且 days<=0 视为永久。
   String get periodText {
+    if (periodTextOverride.isNotEmpty) {
+      return periodTextOverride;
+    }
+    if (days > 0) {
+      return '$days 天';
+    }
     if (months <= 0) {
       return '永久';
     }
@@ -407,6 +433,8 @@ class AppRenewal {
       planName: json['plan_name']?.toString() ?? '',
       price: (json['price'] as num?)?.toDouble() ?? 0,
       months: (json['months'] as num?)?.toInt() ?? 0,
+      days: (json['days'] as num?)?.toInt() ?? 0,
+      periodTextOverride: json['period_text']?.toString() ?? '',
       expiresOn: json['expires_on']?.toString() ?? '',
       newExpiresOn: json['new_expires_on']?.toString() ?? '',
       daysLeft: (json['days_left'] as num?)?.toInt() ?? -1,
@@ -465,6 +493,34 @@ class AppShopData {
               Map<String, dynamic>.from(json['renewal'] as Map),
             )
           : null,
+    );
+  }
+}
+
+/// 客户端公告（服务端 /api/app/notice 返回）。
+///
+/// 后台「用户管理 → 客户端公告」发布后，publishedAt 会更新；
+/// 客户端把它与本地已读时间比较，不一致就展示红点。
+class AppNotice {
+  final String title;
+  final String content;
+
+  /// 服务端发布/更新时间（ISO 8601，UTC），未发布时为空串。
+  final String publishedAt;
+
+  const AppNotice({
+    this.title = '',
+    this.content = '',
+    this.publishedAt = '',
+  });
+
+  bool get hasNotice => title.trim().isNotEmpty || content.trim().isNotEmpty;
+
+  factory AppNotice.fromJson(Map<String, dynamic> json) {
+    return AppNotice(
+      title: (json['title'] ?? '').toString(),
+      content: (json['content'] ?? '').toString(),
+      publishedAt: (json['published_at'] ?? '').toString(),
     );
   }
 }
@@ -897,6 +953,24 @@ class AppAuth extends ChangeNotifier {
   }
 
   /// 套餐中心数据：套餐列表、我的订单、付款说明与余额。
+  /// 客户端公告：无需登录即可读取，供首页「公告」入口与公告页使用。
+  Future<AppNotice> fetchNotice() async {
+    try {
+      final response = await _dio().get<dynamic>('/api/app/notice');
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppApiException(data['error']?.toString() ?? '加载公告失败，请稍后重试');
+      }
+      return AppNotice.fromJson(data);
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
   Future<AppShopData> fetchShop() async {
     final token = _token;
     if (token == null || token.isEmpty) {
