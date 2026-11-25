@@ -36,6 +36,11 @@ class _LoginPageState extends State<LoginPage> {
     if (account.isNotEmpty) {
       _accountController.text = account;
     }
+    // 被其他设备顶下线时，登录页给出明确原因。
+    final notice = AppAuth.instance.consumeLoginNotice();
+    if (notice.isNotEmpty) {
+      _error = notice;
+    }
   }
 
   @override
@@ -91,6 +96,23 @@ class _LoginPageState extends State<LoginPage> {
       }
       FocusScope.of(context).unfocus();
       setState(() => _loading = false);
+    } on AppDeviceLimitException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = null;
+      });
+      final proceed = await _confirmKickOthers(e);
+      if (!mounted || !proceed) {
+        return;
+      }
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+      await _loginForce(account: account, password: password);
     } catch (e) {
       if (!mounted) {
         return;
@@ -100,6 +122,123 @@ class _LoginPageState extends State<LoginPage> {
         _error = e.toString();
       });
     }
+  }
+
+  /// 强制退出其他设备后重新登录。
+  Future<void> _loginForce({
+    required String account,
+    required String password,
+  }) async {
+    try {
+      await AppAuth.instance.login(
+        account: account,
+        password: password,
+        forceDevice: true,
+      );
+      if (!mounted) {
+        return;
+      }
+      FocusScope.of(context).unfocus();
+      setState(() => _loading = false);
+    } on AppApiException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  /// 设备数超限确认框：说明套餐名称、限制台数与在线设备，提供强制退出选项。
+  Future<bool> _confirmKickOthers(AppDeviceLimitException error) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final limitText = error.limit > 0 ? '${error.limit}' : '当前套餐';
+        final planText = error.planName.trim().isEmpty
+            ? ''
+            : '「${error.planName.trim()}」';
+        return AlertDialog(
+          title: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.devices_other_outlined),
+              SizedBox(width: 8),
+              Text('设备数量已达上限'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                error.message.trim().isEmpty
+                    ? '你的$planText套餐最多允许 $limitText 台设备同时在线。'
+                    : error.message,
+                style: const TextStyle(height: 1.5),
+              ),
+              if (error.devices.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  '当前在线设备',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                ...error.devices.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.smartphone, size: 14),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            item.label,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                '继续登录将强制退出以上其他设备，该操作会断开对方客户端的登录状态。',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.5,
+                  color: Theme.of(dialogContext).colorScheme.error,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: error.canForce
+                  ? () => Navigator.of(dialogContext).pop(true)
+                  : null,
+              child: const Text('强制退出并登录'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
   }
 
   Future<void> _runDiagnose() async {

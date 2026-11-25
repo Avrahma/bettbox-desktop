@@ -534,6 +534,64 @@ class AppApiException implements Exception {
   String toString() => message;
 }
 
+/// 在线设备条目（服务端 DEVICE_LIMIT 响应里的 devices 数组）。
+class AppDeviceInfo {
+  const AppDeviceInfo({this.id = '', this.platform = '', this.deviceName = ''});
+
+  final String id;
+  final String platform;
+  final String deviceName;
+
+  String get label {
+    if (deviceName.trim().isNotEmpty) {
+      return deviceName.trim();
+    }
+    switch (platform) {
+      case 'android':
+        return '安卓设备';
+      case 'windows':
+        return 'Windows 电脑';
+      case 'macos':
+        return 'Mac 电脑';
+      case 'linux':
+        return 'Linux 电脑';
+      case 'ios':
+        return 'iPhone';
+    }
+    return '其他设备';
+  }
+
+  static AppDeviceInfo fromJson(Object? raw) {
+    if (raw is! Map) {
+      return const AppDeviceInfo();
+    }
+    return AppDeviceInfo(
+      id: raw['id']?.toString() ?? '',
+      platform: raw['platform']?.toString() ?? '',
+      deviceName: raw['device_name']?.toString() ?? '',
+    );
+  }
+}
+
+/// 登录被「套餐同时在线设备数」拦截：带上限、套餐名与在线设备列表，
+/// 界面据此弹出「强制退出其他设备并登录」确认框。
+class AppDeviceLimitException extends AppApiException {
+  AppDeviceLimitException(
+    super.message, {
+    this.limit = 0,
+    this.onlineCount = 0,
+    this.planName = '',
+    this.devices = const [],
+    this.canForce = true,
+  });
+
+  final int limit;
+  final int onlineCount;
+  final String planName;
+  final List<AppDeviceInfo> devices;
+  final bool canForce;
+}
+
 /// 余额支付下单失败：余额不足时带上缺口金额，便于引导去充值。
 class AppPurchaseException extends AppApiException {
   AppPurchaseException(
@@ -662,6 +720,12 @@ class AppAuth extends ChangeNotifier {
   AppAccountData? _account;
   bool _restored = false;
 
+  /// 上次登录时被强制退出的设备（仅本次登录内有效，用于提示）。
+  List<AppDeviceInfo> _lastKickedDevices = const [];
+
+  /// 被服务端踢下线的原因，登录页展示一次后清空。
+  String _loginNotice = '';
+
   String get baseUrl => _baseUrl;
 
   String? get token => _token;
@@ -669,6 +733,20 @@ class AppAuth extends ChangeNotifier {
   String? get ticket => _ticket;
 
   AppAccountData? get account => _account;
+
+  /// 本次登录是否强制退出了其他设备。
+  List<AppDeviceInfo> get lastKickedDevices => _lastKickedDevices;
+
+  /// 取走并清空待展示的登录页提示（设备被踢、强制下线等）。
+  String consumeLoginNotice() {
+    final value = _loginNotice;
+    _loginNotice = '';
+    return value;
+  }
+
+  void setLoginNotice(String value) {
+    _loginNotice = value.trim();
+  }
 
   AppSubscription? get subscription => _account?.primary;
 
@@ -867,6 +945,7 @@ class AppAuth extends ChangeNotifier {
   Future<void> login({
     required String account,
     required String password,
+    bool forceDevice = false,
   }) async {
     try {
       final device = await DeviceIdentity.load();
@@ -878,6 +957,7 @@ class AppAuth extends ChangeNotifier {
           'device_id': device.id,
           'platform': device.platform,
           'device_name': device.name,
+          if (forceDevice) 'force_device': true,
         },
       );
       final body = response.data;
@@ -886,8 +966,37 @@ class AppAuth extends ChangeNotifier {
       }
       final data = Map<String, dynamic>.from(body);
       if (data['ok'] != true) {
-        throw AppApiException(data['error']?.toString() ?? '登录失败');
+        final code = data['code']?.toString() ?? '';
+        final message = data['error']?.toString() ?? '登录失败';
+        if (code == 'DEVICE_LIMIT') {
+          final devices = <AppDeviceInfo>[];
+          final rawDevices = data['devices'];
+          if (rawDevices is List) {
+            for (final item in rawDevices) {
+              devices.add(AppDeviceInfo.fromJson(item));
+            }
+          }
+          throw AppDeviceLimitException(
+            message,
+            limit: (data['limit'] as num?)?.toInt() ?? 0,
+            onlineCount:
+                (data['online_count'] as num?)?.toInt() ?? devices.length,
+            planName: data['plan_name']?.toString() ?? '',
+            devices: devices,
+            canForce: data['can_force'] != false,
+          );
+        }
+        throw AppApiException(message);
       }
+      final kicked = <AppDeviceInfo>[];
+      final rawKicked = data['kicked_devices'];
+      if (rawKicked is List) {
+        for (final item in rawKicked) {
+          kicked.add(AppDeviceInfo.fromJson(item));
+        }
+      }
+      _lastKickedDevices = kicked;
+      _loginNotice = '';
       _token = data['token']?.toString();
       _ticket = data['web_ticket']?.toString();
       _account = AppAccountData.fromJson(data);
@@ -1248,6 +1357,14 @@ class AppAuth extends ChangeNotifier {
         return false;
       }
       if (response.statusCode == 401) {
+        // 被服务端判定设备超限踢下线时，登录页需要明确告知原因。
+        final raw = response.data;
+        if (raw is Map && raw['code']?.toString() == 'DEVICE_KICKED') {
+          final text = raw['error']?.toString().trim() ?? '';
+          _loginNotice = text.isEmpty
+              ? '该账号已在其他设备上登录，当前设备已被迫下线，请重新登录'
+              : '$text（当前设备已被迫下线，请重新登录）';
+        }
         return false;
       }
       final body = response.data;

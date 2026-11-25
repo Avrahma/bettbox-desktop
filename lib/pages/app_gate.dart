@@ -105,11 +105,15 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       // 未登录也必须清空上一账户残留的订阅配置。
       final ids = globalState.config.profiles.map((item) => item.id).toList();
       unawaited(
-        _waitAppReady().then(
-          (_) => AppSubscriptionGuard.instance.purgeAllOnLogout(
+        _waitAppReady().then((_) async {
+          // 等待期间用户可能已登录：此时不能清理，否则会把刚导入的配置删掉。
+          if (!mounted || AppAuth.instance.loggedIn) {
+            return;
+          }
+          await AppSubscriptionGuard.instance.purgeAllOnLogout(
             profileIds: ids,
-          ),
-        ),
+          );
+        }),
       );
     }
   }
@@ -175,12 +179,22 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
             .map((item) => item.id)
             .toList();
         unawaited(
-          _waitAppReady().then(
-            (_) => AppSubscriptionGuard.instance.purgeAllOnLogout(
+          _waitAppReady().then((_) async {
+            if (!mounted) {
+              return;
+            }
+            final nowOwner = _currentOwnerKey();
+            if (!AppAuth.instance.loggedIn ||
+                nowOwner == null ||
+                nowOwner == previousOwner) {
+              // 已退出或又切回同一账户：无需按旧账户清理。
+              return;
+            }
+            await AppSubscriptionGuard.instance.purgeAllOnLogout(
               profileIds: ids,
               previousOwner: previousOwner,
-            ),
-          ),
+            );
+          }),
         );
       }
       // 刷新过程中数据会多次变更，由刷新流程自行收敛，避免重复触发。
@@ -206,12 +220,17 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       final previousOwner = oldOwnerKey;
       final ids = globalState.config.profiles.map((item) => item.id).toList();
       unawaited(
-        _waitAppReady().then(
-          (_) => AppSubscriptionGuard.instance.purgeAllOnLogout(
+        _waitAppReady().then((_) async {
+          // 退出后若用户立刻又重新登录，延迟执行的清理必须跳过，
+          // 否则会把新会话刚导入的配置删掉（表现为登录成功却没有任何线路）。
+          if (!mounted || AppAuth.instance.loggedIn) {
+            return;
+          }
+          await AppSubscriptionGuard.instance.purgeAllOnLogout(
             profileIds: ids,
             previousOwner: previousOwner,
-          ),
-        ),
+          );
+        }),
       );
       _ensureSignedOutUi();
     }
@@ -360,7 +379,44 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       } while (_syncPending);
     } finally {
       _syncing = false;
+      _scheduleImportVerify();
     }
+  }
+
+  int _verifyRound = 0;
+
+  /// 导入后复核：退出登录时排队的延迟清理可能晚于新会话的导入执行，
+  /// 导致「登录成功却没有任何线路」。这里延迟复核并少量补导一次。
+  void _scheduleImportVerify() {
+    if (!AppAuth.instance.loggedIn) {
+      return;
+    }
+    final url = AppAuth.instance.subscription?.subUrl.trim() ?? '';
+    if (url.isEmpty) {
+      return;
+    }
+    unawaited(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (!mounted || !AppAuth.instance.loggedIn) {
+        return;
+      }
+      final still = globalState.config.profiles.any(
+        (item) => item.url.trim() == url,
+      );
+      if (still) {
+        _verifyRound = 0;
+        return;
+      }
+      if (_verifyRound >= 3) {
+        commonPrint.warn('AppGate profile missing after sync, give up re-import');
+        return;
+      }
+      _verifyRound++;
+      commonPrint.warn(
+        'AppGate profile missing after sync, re-import $_verifyRound',
+      );
+      await _syncProfile(forceProfileRefresh: true);
+    }());
   }
 
   /// 执行一次完整同步，返回是否无需再重试。
