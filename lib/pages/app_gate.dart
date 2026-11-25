@@ -7,6 +7,7 @@ import 'package:bett_box/common/common.dart';
 import 'package:bett_box/models/models.dart';
 import 'package:bett_box/pages/home.dart';
 import 'package:bett_box/pages/login.dart';
+import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/providers/providers.dart';
 import 'package:bett_box/state.dart';
 import 'package:material_ui/material_ui.dart';
@@ -25,6 +26,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
   bool _syncing = false;
   bool _syncPending = false;
   bool _refreshing = false;
+  bool _expiryPrompted = false;
   String? _ownerKey;
   String _subscriptionSignature = '';
   Timer? _retryTimer;
@@ -195,6 +197,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       }
     } else {
       _wasLoggedIn = false;
+      _expiryPrompted = false;
       final oldOwnerKey = _ownerKey;
       _ownerKey = null;
       _subscriptionSignature = '';
@@ -254,6 +257,77 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       _refreshing = false;
     }
     await _syncProfile(forceProfileRefresh: forceProfileRefresh);
+    if (mounted) {
+      unawaited(_maybePromptExpiry());
+    }
+  }
+
+  /// 订阅剩余 ≤3 天时提醒续费（每次启动最多一次，点击可直达套餐中心）。
+  Future<void> _maybePromptExpiry() async {
+    if (_expiryPrompted || !mounted) {
+      return;
+    }
+    final account = AppAuth.instance.account;
+    if (account == null) {
+      return;
+    }
+    final candidates = account.subscriptions
+        .where(
+          (item) =>
+              !item.expired &&
+              item.daysLeft >= 0 &&
+              item.subUrl.trim().isNotEmpty,
+        )
+        .toList()
+      ..sort((a, b) => a.daysLeft.compareTo(b.daysLeft));
+    if (candidates.isEmpty) {
+      return;
+    }
+    final item = candidates.first;
+    if (item.daysLeft > 3) {
+      return;
+    }
+    _expiryPrompted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        return;
+      }
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.notifications_active_outlined),
+              SizedBox(width: 8),
+              Text('订阅即将到期'),
+            ],
+          ),
+          content: Text(
+            item.daysLeft <= 0
+                ? '你的「${item.planName}」今天（${item.expiresOn}）到期，续费后可继续使用。'
+                : '你的「${item.planName}」还有 ${item.daysLeft} 天到期'
+                      '（${item.expiresOn}），建议及时续费，避免线路中断。',
+            style: const TextStyle(height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('稍后'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('去续费'),
+            ),
+          ],
+        ),
+      );
+      if (go == true && mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ShopPage()),
+        );
+      }
+    });
   }
 
   /// 把账号当前生效的订阅导入为配置并启用，同时清除其他账户的订阅。

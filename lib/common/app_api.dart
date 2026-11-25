@@ -363,6 +363,59 @@ class AppOrder {
 }
 
 /// 套餐中心聚合数据：套餐、订单、站点付款说明与余额。
+/// 可续费订阅（服务端 /api/app/shop 的 renewal 字段）。
+class AppRenewal {
+  const AppRenewal({
+    required this.allocationId,
+    required this.planId,
+    required this.planName,
+    required this.price,
+    required this.months,
+    required this.expiresOn,
+    required this.newExpiresOn,
+    required this.daysLeft,
+    required this.expired,
+    required this.permanent,
+  });
+
+  final int allocationId;
+  final int planId;
+  final String planName;
+  final double price;
+  final int months;
+  final String expiresOn;
+  final String newExpiresOn;
+  final int daysLeft;
+  final bool expired;
+  final bool permanent;
+
+  /// 续费周期文案：1 个月 / 3 个月 / 1 年；months<=0 视为永久。
+  String get periodText {
+    if (months <= 0) {
+      return '永久';
+    }
+    if (months % 12 == 0) {
+      return '${months ~/ 12} 年';
+    }
+    return '$months 个月';
+  }
+
+  static AppRenewal fromJson(Map<String, dynamic> json) {
+    return AppRenewal(
+      allocationId: (json['allocation_id'] as num?)?.toInt() ?? 0,
+      planId: (json['plan_id'] as num?)?.toInt() ?? 0,
+      planName: json['plan_name']?.toString() ?? '',
+      price: (json['price'] as num?)?.toDouble() ?? 0,
+      months: (json['months'] as num?)?.toInt() ?? 0,
+      expiresOn: json['expires_on']?.toString() ?? '',
+      newExpiresOn: json['new_expires_on']?.toString() ?? '',
+      daysLeft: (json['days_left'] as num?)?.toInt() ?? -1,
+      expired: json['expired'] == true,
+      permanent: json['permanent'] == true,
+    );
+  }
+}
+
 class AppShopData {
   const AppShopData({
     required this.plans,
@@ -370,6 +423,7 @@ class AppShopData {
     required this.payGuide,
     required this.balance,
     required this.codeLimit,
+    this.renewal,
   });
 
   final List<AppPlan> plans;
@@ -377,6 +431,9 @@ class AppShopData {
   final String payGuide;
   final double balance;
   final int codeLimit;
+
+  /// 当前可续费的订阅（最早到期的有效订阅优先），无订阅时为 null。
+  final AppRenewal? renewal;
 
   static AppShopData fromJson(Map<String, dynamic> json) {
     final plans = <AppPlan>[];
@@ -403,6 +460,11 @@ class AppShopData {
       payGuide: json['pay_guide']?.toString() ?? '',
       balance: (json['balance'] as num?)?.toDouble() ?? 0,
       codeLimit: (json['code_limit'] as num?)?.toInt() ?? 180,
+      renewal: json['renewal'] is Map
+          ? AppRenewal.fromJson(
+              Map<String, dynamic>.from(json['renewal'] as Map),
+            )
+          : null,
     );
   }
 }
@@ -497,6 +559,21 @@ class AppWallet {
 }
 
 /// 余额支付购买结果。
+/// 优惠码校验结果：原价、优惠金额与折后价（单位：元）。
+class AppCouponQuote {
+  const AppCouponQuote({
+    required this.code,
+    required this.originPrice,
+    required this.discount,
+    required this.finalPrice,
+  });
+
+  final String code;
+  final double originPrice;
+  final double discount;
+  final double finalPrice;
+}
+
 class AppPurchaseResult {
   const AppPurchaseResult({
     required this.order,
@@ -904,8 +981,45 @@ class AppAuth extends ChangeNotifier {
     }
   }
 
+  /// 校验优惠码并返回折后价，无效时抛出 [AppApiException]。
+  Future<AppCouponQuote> checkCoupon({
+    required int planId,
+    required String code,
+  }) async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().post<dynamic>(
+        '/api/app/coupon/check',
+        data: {'plan_id': planId, 'coupon_code': code},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppApiException(data['error']?.toString() ?? '优惠码无效');
+      }
+      return AppCouponQuote(
+        code: data['code']?.toString() ?? code,
+        originPrice: (data['origin_price'] as num?)?.toDouble() ?? 0,
+        discount: (data['discount'] as num?)?.toDouble() ?? 0,
+        finalPrice: (data['final_price'] as num?)?.toDouble() ?? 0,
+      );
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
   /// 余额支付购买套餐：服务端扣余额、建链并自动开通订阅。
-  Future<AppPurchaseResult> purchaseWithBalance(int planId) async {
+  Future<AppPurchaseResult> purchaseWithBalance(
+    int planId, {
+    String couponCode = '',
+  }) async {
     final token = _token;
     if (token == null || token.isEmpty) {
       throw AppApiException('登录已失效，请重新登录');
@@ -913,7 +1027,10 @@ class AppAuth extends ChangeNotifier {
     try {
       final response = await _dio().post<dynamic>(
         '/api/app/purchase',
-        data: {'plan_id': planId},
+        data: {
+          'plan_id': planId,
+          if (couponCode.trim().isNotEmpty) 'coupon_code': couponCode.trim(),
+        },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
       final body = response.data;
@@ -944,6 +1061,53 @@ class AppAuth extends ChangeNotifier {
               ),
         balance: (data['balance'] as num?)?.toDouble() ?? 0,
         message: data['message']?.toString() ?? '购买成功，订阅已开通',
+        expiresOn: data['expires_on']?.toString() ?? '',
+      );
+    } on DioException catch (e) {
+      throw AppApiException(_dioMessage(e));
+    }
+  }
+
+  /// 余额支付续费：延长当前订阅到期日，余额不足抛出 AppPurchaseException。
+  Future<AppPurchaseResult> renewWithBalance({int? allocationId}) async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw AppApiException('登录已失效，请重新登录');
+    }
+    try {
+      final response = await _dio().post<dynamic>(
+        '/api/app/renew',
+        data: {'allocation_id': allocationId ?? 0},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final body = response.data;
+      if (body is! Map) {
+        throw AppApiException('服务器返回数据异常');
+      }
+      final data = Map<String, dynamic>.from(body);
+      if (data['ok'] != true) {
+        throw AppPurchaseException(
+          data['error']?.toString() ?? '续费失败，请稍后重试',
+          shortfall: (data['shortfall'] as num?)?.toDouble() ?? 0,
+          needRecharge: data['need_recharge'] == true,
+        );
+      }
+      final rawOrder = data['order'];
+      return AppPurchaseResult(
+        order: rawOrder is Map
+            ? AppOrder.fromJson(Map<String, dynamic>.from(rawOrder))
+            : const AppOrder(
+                id: 0,
+                planName: '',
+                amount: 0,
+                status: 'approved',
+                statusLabel: '已开通',
+                alipayCode: '',
+                createdAt: '',
+                canClaim: false,
+              ),
+        balance: (data['balance'] as num?)?.toDouble() ?? 0,
+        message: data['message']?.toString() ?? '续费成功',
         expiresOn: data['expires_on']?.toString() ?? '',
       );
     } on DioException catch (e) {

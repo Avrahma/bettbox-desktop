@@ -51,6 +51,7 @@ class _ShopPageState extends State<ShopPage>
   String? _error;
   bool _loading = true;
   int? _buyingPlanId;
+  bool _renewing = false;
 
   /// 套餐分类选项卡：年付 → 定制 → 月付。
   late final TabController _tabController = TabController(
@@ -268,28 +269,304 @@ class _ShopPageState extends State<ShopPage>
       return;
     }
     final balance = data.balance;
-    final shortfall = double.parse((plan.price - balance).toStringAsFixed(2));
+    final couponController = TextEditingController();
+    var appliedCode = '';
+    var discount = 0.0;
+    var payPrice = plan.price;
+    String? couponHint;
+    var couponError = false;
+    var checking = false;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+        final colorScheme = theme.colorScheme;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final shortfall = double.parse(
+              (payPrice - balance).toStringAsFixed(2),
+            );
+
+            Future<void> applyCoupon() async {
+              final code = couponController.text.trim();
+              if (code.isEmpty) {
+                setDialogState(() {
+                  couponHint = '请输入优惠码';
+                  couponError = true;
+                });
+                return;
+              }
+              setDialogState(() {
+                checking = true;
+                couponHint = null;
+                couponError = false;
+              });
+              try {
+                final quote = await AppAuth.instance.checkCoupon(
+                  planId: plan.id,
+                  code: code,
+                );
+                setDialogState(() {
+                  checking = false;
+                  appliedCode = quote.code;
+                  discount = quote.discount;
+                  payPrice = quote.finalPrice;
+                  couponError = false;
+                  couponHint =
+                      '已使用 ${quote.code}，优惠 ¥${quote.discount.toStringAsFixed(2)}';
+                });
+              } on AppApiException catch (e) {
+                setDialogState(() {
+                  checking = false;
+                  appliedCode = '';
+                  discount = 0;
+                  payPrice = plan.price;
+                  couponError = true;
+                  couponHint = e.message;
+                });
+              }
+            }
+
+            return AlertDialog(
+              title: Text('购买 ${plan.name}'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _kv(theme, '套餐', plan.name),
+                    _kv(theme, '周期', plan.periodText),
+                    _kv(theme, '套餐原价', '¥${plan.price.toStringAsFixed(2)}'),
+                    if (discount > 0)
+                      _kv(theme, '优惠金额', '-¥${discount.toStringAsFixed(2)}'),
+                    _kv(theme, '应付金额', '¥${payPrice.toStringAsFixed(2)}'),
+                    _kv(theme, '当前余额', '¥${balance.toStringAsFixed(2)}'),
+                    const SizedBox(height: 10),
+                    Text(
+                      '优惠码',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: couponController,
+                            enabled: !checking,
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: '输入优惠码（可选）',
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 12,
+                              ),
+                            ),
+                            onChanged: (value) {
+                              if (appliedCode.isEmpty) {
+                                return;
+                              }
+                              if (value.trim().toUpperCase() != appliedCode) {
+                                setDialogState(() {
+                                  appliedCode = '';
+                                  discount = 0;
+                                  payPrice = plan.price;
+                                  couponHint = null;
+                                  couponError = false;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.tonal(
+                          onPressed: checking ? null : applyCoupon,
+                          child: checking
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('使用'),
+                        ),
+                      ],
+                    ),
+                    if (couponHint != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        couponHint!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: couponError
+                              ? colorScheme.error
+                              : colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Text(
+                      shortfall > 0
+                          ? '余额不足，还差 ¥${shortfall.toStringAsFixed(2)}，需要先充值'
+                          : payPrice <= 0
+                          ? '优惠后无需支付，确认后立即开通订阅'
+                          : '支付后余额 ¥${(balance - payPrice).toStringAsFixed(2)}，'
+                                '确认后立即开通订阅',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: shortfall > 0
+                            ? colorScheme.error
+                            : colorScheme.onSurfaceVariant,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '支付方式：余额支付',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: checking
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(true),
+                  child: Text(
+                    shortfall > 0
+                        ? '去充值'
+                        : (payPrice <= 0 ? '免费开通' : '余额支付'),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    couponController.dispose();
+    if (confirmed != true) {
+      return;
+    }
+    final shortfallAfter = double.parse(
+      (payPrice - balance).toStringAsFixed(2),
+    );
+    if (shortfallAfter > 0) {
+      await _openRecharge();
+      return;
+    }
+    setState(() => _buyingPlanId = plan.id);
+    try {
+      final result = await AppAuth.instance.purchaseWithBalance(
+        plan.id,
+        couponCode: appliedCode,
+      );
+      await AppAuth.instance.refresh();
+      await _load();
+      if (!mounted) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('购买成功'),
+          content: Text(
+            '${result.message}\n\n套餐：${plan.name}\n'
+            '${discount > 0 ? '优惠：-¥${discount.toStringAsFixed(2)}（$appliedCode）\n' : ''}'
+            '实付：¥${payPrice.toStringAsFixed(2)}\n'
+            '到期时间：${result.expiresOn.isEmpty ? '以订阅页为准' : result.expiresOn}\n'
+            '当前余额：¥${result.balance.toStringAsFixed(2)}\n\n'
+            '订阅已自动下发到配置页，可直接使用。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    } on AppPurchaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      _toast(e.message);
+      if (e.needRecharge) {
+        await _openRecharge();
+      }
+    } on AppApiException catch (e) {
+      if (mounted) {
+        _toast(e.message);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _buyingPlanId = null);
+      }
+    }
+  }
+
+  /// 续费当前订阅：余额支付，余额不足时引导去充值。
+  Future<void> _openRenew() async {
+    final data = _data;
+    if (data == null || _renewing) {
+      return;
+    }
+    final renewal = data.renewal;
+    if (renewal == null) {
+      _toast('当前没有可续费的订阅，请先选择套餐购买');
+      return;
+    }
+    if (renewal.permanent) {
+      _toast('永久套餐无需续费');
+      return;
+    }
+    final balance = data.balance;
+    final shortfall = double.parse(
+      (renewal.price - balance).toStringAsFixed(2),
+    );
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         final theme = Theme.of(dialogContext);
         final colorScheme = theme.colorScheme;
         return AlertDialog(
-          title: Text('购买 ${plan.name}'),
+          title: const Text('续费套餐'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _kv(theme, '套餐', plan.name),
-              _kv(theme, '周期', plan.periodText),
-              _kv(theme, '应付金额', '¥${plan.price.toStringAsFixed(2)}'),
+              _kv(theme, '套餐', renewal.planName),
+              _kv(theme, '续费周期', renewal.periodText),
+              _kv(
+                theme,
+                '当前到期',
+                renewal.expiresOn.isEmpty
+                    ? '—'
+                    : '${renewal.expiresOn}${renewal.expired ? '（已到期）' : ''}',
+              ),
+              _kv(
+                theme,
+                '续费后到期',
+                renewal.newExpiresOn.isEmpty ? '以订阅页为准' : renewal.newExpiresOn,
+              ),
+              _kv(theme, '应付金额', '¥${renewal.price.toStringAsFixed(2)}'),
               _kv(theme, '当前余额', '¥${balance.toStringAsFixed(2)}'),
               const SizedBox(height: 8),
               Text(
                 shortfall > 0
                     ? '余额不足，还差 ¥${shortfall.toStringAsFixed(2)}，需要先充值'
-                    : '支付后余额 ¥${(balance - plan.price).toStringAsFixed(2)}，'
-                          '确认后立即开通订阅',
+                    : '支付后余额 ¥${(balance - renewal.price).toStringAsFixed(2)}，'
+                          '确认后立即续费、到期日顺延',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: shortfall > 0
                       ? colorScheme.error
@@ -326,9 +603,11 @@ class _ShopPageState extends State<ShopPage>
       await _openRecharge();
       return;
     }
-    setState(() => _buyingPlanId = plan.id);
+    setState(() => _renewing = true);
     try {
-      final result = await AppAuth.instance.purchaseWithBalance(plan.id);
+      final result = await AppAuth.instance.renewWithBalance(
+        allocationId: renewal.allocationId,
+      );
       await AppAuth.instance.refresh();
       await _load();
       if (!mounted) {
@@ -337,12 +616,12 @@ class _ShopPageState extends State<ShopPage>
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('购买成功'),
+          title: const Text('续费成功'),
           content: Text(
-            '${result.message}\n\n套餐：${plan.name}\n'
+            '${result.message}\n\n套餐：${renewal.planName}\n'
             '到期时间：${result.expiresOn.isEmpty ? '以订阅页为准' : result.expiresOn}\n'
             '当前余额：¥${result.balance.toStringAsFixed(2)}\n\n'
-            '订阅已自动下发到配置页，可直接使用。',
+            '订阅链接已自动更新，请在配置页重新获取订阅。',
           ),
           actions: [
             TextButton(
@@ -366,7 +645,7 @@ class _ShopPageState extends State<ShopPage>
       }
     } finally {
       if (mounted) {
-        setState(() => _buyingPlanId = null);
+        setState(() => _renewing = false);
       }
     }
   }
@@ -427,9 +706,17 @@ class _ShopPageState extends State<ShopPage>
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
                   children: [
+                    _ExpiryBanner(
+                      renewal: data?.renewal,
+                      busy: _renewing,
+                      onRenew: () => unawaited(_openRenew()),
+                    ),
                     _BalanceBar(
                       balance: data?.balance ?? 0,
+                      renewal: data?.renewal,
+                      busy: _renewing,
                       onRecharge: () => unawaited(_openRecharge()),
+                      onRenew: () => unawaited(_openRenew()),
                     ),
                     const SizedBox(height: 18),
                     _SectionTitle(title: '选择套餐'),
@@ -537,11 +824,118 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+/// 到期前 3 天起在套餐中心顶部提示续费；已过期时提示续费恢复。
+class _ExpiryBanner extends StatelessWidget {
+  const _ExpiryBanner({
+    required this.renewal,
+    required this.busy,
+    required this.onRenew,
+  });
+
+  final AppRenewal? renewal;
+  final bool busy;
+  final VoidCallback onRenew;
+
+  @override
+  Widget build(BuildContext context) {
+    final item = renewal;
+    if (item == null || item.permanent) {
+      return const SizedBox.shrink();
+    }
+    final days = item.daysLeft;
+    final expired = item.expired || days < 0;
+    if (!expired && days > 3) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final expire = item.expiresOn.isEmpty ? '到期日未知' : item.expiresOn;
+    final text = expired
+        ? '订阅已于 $expire 到期，续费后立即恢复使用'
+        : days <= 0
+        ? '订阅今天（$expire）到期，请及时续费'
+        : '订阅还剩 $days 天到期（$expire），请及时续费';
+    final fg = colorScheme.onErrorContainer;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.notifications_active_outlined, color: fg, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  expired ? '订阅已到期' : '续费提醒',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  text,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: fg.withValues(alpha: 0.9),
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          FilledButton(
+            onPressed: busy ? null : onRenew,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              backgroundColor: fg,
+              foregroundColor: colorScheme.errorContainer,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: const Text('立即续费'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BalanceBar extends StatelessWidget {
-  const _BalanceBar({required this.balance, required this.onRecharge});
+  const _BalanceBar({
+    required this.balance,
+    required this.renewal,
+    required this.busy,
+    required this.onRecharge,
+    required this.onRenew,
+  });
 
   final double balance;
+  final AppRenewal? renewal;
+  final bool busy;
   final VoidCallback onRecharge;
+  final VoidCallback onRenew;
+
+  String get _renewHint {
+    final item = renewal;
+    if (item == null) {
+      return '暂无可续费订阅';
+    }
+    if (item.permanent) {
+      return '永久套餐，无需续费';
+    }
+    final expire = item.expiresOn.isEmpty ? '到期日未知' : '${item.expiresOn} 到期';
+    return '${item.planName} · $expire';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -554,6 +948,7 @@ class _BalanceBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
             Icons.account_balance_wallet_outlined,
@@ -581,18 +976,62 @@ class _BalanceBar extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+                const SizedBox(height: 4),
+                Text(
+                  _renewHint,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onPrimaryContainer.withValues(
+                      alpha: 0.75,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
-          FilledButton.tonal(
-            onPressed: onRecharge,
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(0, 34),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              visualDensity: VisualDensity.compact,
+          const SizedBox(width: 14),
+          SizedBox(
+            width: 88,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton.tonal(
+                  onPressed: busy ? null : onRenew,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 34),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('续费'),
+                ),
+                const SizedBox(height: 14),
+                OutlinedButton(
+                  onPressed: busy ? null : onRecharge,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 34),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: colorScheme.onPrimaryContainer,
+                    side: BorderSide(
+                      color: colorScheme.onPrimaryContainer.withValues(
+                        alpha: 0.35,
+                      ),
+                    ),
+                  ),
+                  child: const Text('充值'),
+                ),
+              ],
             ),
-            child: const Text('充值'),
           ),
         ],
       ),

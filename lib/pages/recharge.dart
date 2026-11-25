@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
+
 import 'package:bett_box/common/app_api.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -59,6 +61,147 @@ class _RechargePageState extends State<RechargePage> {
         _loading = false;
       });
     }
+  }
+
+  /// 从剪贴板粘贴支付宝口令，减少手输出错。
+  Future<void> _pasteCode() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = (data?.text ?? '').trim();
+    if (text.isEmpty) {
+      _toast('剪贴板为空，请先在支付宝复制口令');
+      return;
+    }
+    _codeController.text = text;
+    _codeController.selection = TextSelection.collapsed(
+      offset: _codeController.text.length,
+    );
+  }
+
+  /// 口令红包发送步骤（支付宝 App 内路径）。
+  void _showRedPacketGuide() {
+    const steps = <String>[
+      '打开支付宝，进入「消息」页，点右上角「+」→「发红包」。',
+      '选择「口令红包」，输入本次充值金额（建议与订单金额一致）。',
+      '设置口令：可选系统随机口令，或自定义数字/文字口令（如 6 位数字）。',
+      '确认支付并发送，进入红包详情页点「复制口令」。',
+      '回到本页粘贴口令后提交，管理员核对领取后余额到账。',
+    ];
+    const tips = <String>[
+      '口令红包每人只能领一次，请务必自己领取或提醒管理员尽快领取。',
+      '请在提交后 24 小时内保持红包未过期，过期未领视为充值失败。',
+      '充值是人工核对，提交后通常几分钟内到账，本页下拉即可刷新状态。',
+    ];
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        final colorScheme = theme.colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              4,
+              20,
+              20 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '如何发送支付宝口令红包',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  for (var i = 0; i < steps.length; i++) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 22,
+                          height: 22,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: colorScheme.primaryContainer,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            '${i + 1}',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            steps[i],
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (i != steps.length - 1) const SizedBox(height: 12),
+                  ],
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final tip in tips) ...[
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.info_outline,
+                                size: 14,
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  tip,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      child: const Text('知道了'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _toast(String message) {
@@ -168,17 +311,60 @@ class _RechargePageState extends State<RechargePage> {
                                 height: 1.5,
                               ),
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 4),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: _showRedPacketGuide,
+                                style: TextButton.styleFrom(
+                                  padding: EdgeInsets.zero,
+                                  minimumSize: const Size(0, 30),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                                icon: const Icon(
+                                  Icons.help_outline,
+                                  size: 16,
+                                ),
+                                label: const Text('如何发送支付宝口令红包？'),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
                             TextField(
                               controller: _codeController,
                               enabled: !_submitting,
-                              minLines: 2,
-                              maxLines: 4,
+                              maxLines: 1,
                               textInputAction: TextInputAction.done,
-                              decoration: const InputDecoration(
+                              style: theme.textTheme.bodyMedium,
+                              decoration: InputDecoration(
+                                isDense: true,
                                 labelText: '支付宝口令红包密码',
-                                hintText: '把支付宝里复制的口令粘贴到这里',
-                                border: OutlineInputBorder(),
+                                hintText: '粘贴支付宝复制的口令',
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 12,
+                                ),
+                                suffixIconConstraints: const BoxConstraints(
+                                  minWidth: 56,
+                                  minHeight: 36,
+                                ),
+                                suffixIcon: TextButton(
+                                  onPressed: _submitting
+                                      ? null
+                                      : () => unawaited(_pasteCode()),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    minimumSize: const Size(0, 32),
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  child: const Text('粘贴'),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 12),
