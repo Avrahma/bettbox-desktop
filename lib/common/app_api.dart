@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:bett_box/common/device_identity.dart';
 import 'package:bett_box/common/preferences.dart';
 import 'package:bett_box/common/print.dart';
 import 'package:dio/dio.dart';
@@ -568,6 +569,23 @@ class AppAuth extends ChangeNotifier {
         validateStatus: (status) => status != null && status < 500,
       ),
     );
+    // 每个请求都带上设备身份，供服务端做「套餐同时在线设备数」限制与
+    // 会话心跳（服务端按 last_seen 判断设备是否仍占名额）。
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) async {
+          try {
+            final device = await DeviceIdentity.load();
+            options.headers['X-Device-Id'] = device.id;
+            options.headers['X-Device-Platform'] = device.platform;
+            options.headers['X-Device-Name'] = device.name;
+          } catch (_) {
+            // 取不到设备信息时不阻塞业务请求，由服务端按老客户端放行。
+          }
+          handler.next(options);
+        },
+      ),
+    );
     // 站点接口固定直连：App 内的 HttpClient 全局被 HttpOverrides 接管，
     // 代理运行时会把请求塞进本机 mixedPort；一旦节点失效，登录也会被拖死。
     dio.httpClientAdapter = IOHttpClientAdapter(
@@ -718,9 +736,16 @@ class AppAuth extends ChangeNotifier {
     required String password,
   }) async {
     try {
+      final device = await DeviceIdentity.load();
       final response = await _dio().post<dynamic>(
         '/api/app/login',
-        data: {'email': account.trim(), 'password': password},
+        data: {
+          'email': account.trim(),
+          'password': password,
+          'device_id': device.id,
+          'platform': device.platform,
+          'device_name': device.name,
+        },
       );
       final body = response.data;
       if (body is! Map) {
@@ -764,12 +789,16 @@ class AppAuth extends ChangeNotifier {
     String code = '',
   }) async {
     try {
+      final device = await DeviceIdentity.load();
       final response = await _dio().post<dynamic>(
         '/api/app/register',
         data: {
           'email': email.trim().toLowerCase(),
           'password': password,
           'code': code.trim(),
+          'device_id': device.id,
+          'platform': device.platform,
+          'device_name': device.name,
         },
       );
       final body = response.data;
@@ -1027,6 +1056,11 @@ class AppAuth extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // 先通知服务端释放本机占用的设备名额；失败不阻塞本地退出。
+    final token = _token;
+    if (token != null && token.isNotEmpty) {
+      unawaited(_releaseServerSession(token));
+    }
     // 先清内存登录态并立即通知界面切回登录页，
     // 避免本地存储 IO 异常或卡顿导致界面停留在首页退不出去。
     _token = null;
@@ -1051,6 +1085,26 @@ class AppAuth extends ChangeNotifier {
       }
     } catch (e) {
       commonPrint.warn('AppAuth logout persist failed: $e');
+    }
+  }
+
+  /// 服务端退出：释放本设备的在线名额。失败只记日志，不影响本地退出。
+  Future<void> _releaseServerSession(String token) async {
+    try {
+      final device = await DeviceIdentity.load();
+      await _dio().post<dynamic>(
+        '/api/app/logout',
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+            'X-Device-Id': device.id,
+            'X-Device-Platform': device.platform,
+            'X-Device-Name': device.name,
+          },
+        ),
+      ).timeout(const Duration(seconds: 6));
+    } catch (e) {
+      commonPrint.warn('AppAuth server logout failed: $e');
     }
   }
 
