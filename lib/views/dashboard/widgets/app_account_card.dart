@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/app_notice.dart';
+import 'package:bett_box/common/app_subscription_importer.dart';
 import 'package:bett_box/common/common.dart';
 import 'package:bett_box/pages/notice.dart';
 import 'package:bett_box/pages/shop.dart';
@@ -31,6 +32,35 @@ class AppAccountCard extends StatefulWidget {
 
 class _AppAccountCardState extends State<AppAccountCard> {
   bool _refreshing = false;
+  bool _importing = false;
+
+  /// 手动把账号当前套餐的订阅导入为配置，并给出明确结果提示。
+  Future<void> _reimport() async {
+    if (_importing) {
+      return;
+    }
+    setState(() => _importing = true);
+    final result = await AppSubscriptionImporter.import(activate: true);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _importing = false);
+    String text;
+    if (result.ok) {
+      text = '订阅已导入并启用，可在「配置」中查看线路。';
+    } else if (result.noSubscription) {
+      text = '当前账号没有可用订阅链接，请先在套餐中心购买或续费。';
+    } else {
+      text = result.message ?? '订阅导入失败，请稍后重试。';
+    }
+    unawaited(
+      globalState.showMessage(
+        title: '订阅导入',
+        message: TextSpan(text: text),
+        cancelable: false,
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -96,6 +126,8 @@ class _AppAccountCardState extends State<AppAccountCard> {
     if (!valid) {
       return;
     }
+    // 刷新到新套餐/续费结果后，自动补做一次订阅导入，避免只有账号信息没有线路。
+    unawaited(AppSubscriptionImporter.import(activate: true));
     unawaited(
       globalState.showMessage(
         title: '提示',
@@ -191,6 +223,25 @@ class _AppAccountCardState extends State<AppAccountCard> {
               ],
             ),
           ),
+          IconButton(
+            onPressed: _importing ? null : () => unawaited(_reimport()),
+            tooltip: '重新导入订阅',
+            visualDensity: VisualDensity.compact,
+            style: IconButton.styleFrom(
+              minimumSize: const Size(32, 32),
+              padding: EdgeInsets.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              foregroundColor: colorScheme.onSurfaceVariant,
+            ),
+            icon: _importing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const AppIcon(Icons.cloud_download_outlined, size: 19),
+          ),
+          const SizedBox(width: 10),
           IconButton(
             onPressed: _refreshing ? null : () => unawaited(_refresh()),
             tooltip: '刷新账户信息',

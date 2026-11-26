@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/app_subscription_guard.dart';
+import 'package:bett_box/common/app_subscription_importer.dart';
 import 'package:bett_box/common/app_visibility.dart';
 import 'package:bett_box/common/common.dart';
 import 'package:bett_box/models/models.dart';
@@ -461,6 +462,20 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
         } catch (e) {
           commonPrint.warn('AppGate purge on empty sub failed: $e');
         }
+      } else {
+        // 账号数据里没有 primary，但订阅列表里可能还有可用链接：直接尝试导入，
+        // 避免「账户有套餐却没有任何线路」。
+        final imported = await AppSubscriptionImporter.import();
+        if (imported.ok) {
+          _emptySubTimer?.cancel();
+          _emptySubRound = 0;
+          return true;
+        }
+        if (!imported.noSubscription) {
+          _notifyImportFailure(imported.message);
+          _scheduleRetry();
+          return false;
+        }
       }
       // 冷启动时首个刷新请求可能因网络未就绪失败，稍后重新拉取账号数据。
       _scheduleEmptySubRetry();
@@ -485,35 +500,38 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       unawaited(_autoRefreshPlanProfile(existing, force: force));
       return true;
     }
-    Object? lastError;
-    for (var attempt = 0; attempt < 5; attempt++) {
-      if (!AppAuth.instance.loggedIn || _currentOwnerKey() != owner) {
-        return true;
-      }
-      try {
-        final label = sub.planName.isEmpty ? '我的订阅' : sub.planName;
-        final profile = await Profile.normal(url: url, label: label).update();
-        await globalState.appController.addProfile(profile, activate: true);
-        final added = globalState.config.profiles.any(
-          (item) => item.id == profile.id || item.url.trim() == url,
-        );
-        if (!added) {
-          throw StateError('profile not persisted');
-        }
-        await AppSubscriptionGuard.instance.recordOwner(profile.id, owner);
-        _emptySubTimer?.cancel();
-        _emptySubRound = 0;
-        // 新导入的订阅本身就是最新内容，无需再强制刷新。
-        _forceProfileRefreshPending = false;
-        return true;
-      } catch (e) {
-        lastError = e;
-        await Future<void>.delayed(Duration(seconds: 2 + attempt * 2));
-      }
+    final imported = await AppSubscriptionImporter.import(activate: true);
+    if (imported.ok) {
+      _emptySubTimer?.cancel();
+      _emptySubRound = 0;
+      // 新导入的订阅本身就是最新内容，无需再强制刷新。
+      _forceProfileRefreshPending = false;
+      return true;
     }
-    commonPrint.warn('AppGate sync profile failed: $lastError');
+    commonPrint.warn('AppGate sync profile failed: ${imported.message}');
+    _notifyImportFailure(imported.message);
     _scheduleRetry();
     return false;
+  }
+
+  bool _importFailureNotified = false;
+
+  /// 订阅导入失败时给一次明确提示，避免「登录成功却没有任何线路」且无反馈。
+  void _notifyImportFailure(String? message) {
+    if (_importFailureNotified) {
+      return;
+    }
+    _importFailureNotified = true;
+    final detail = (message ?? '').trim();
+    final text = detail.isEmpty
+        ? '订阅导入失败，请在首页「账户」卡片点右侧下载按钮重试'
+        : '订阅导入失败：$detail';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !AppAuth.instance.loggedIn) {
+        return;
+      }
+      globalState.showNotifier(text);
+    });
   }
 
   /// 订阅自动刷新策略：每次重新打开软件强制更新一次；平时运行中每 2 小时
