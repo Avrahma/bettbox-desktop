@@ -1452,7 +1452,7 @@ class AppController {
   }
 
   void _handleUpdateGroupsError(int generation, dynamic e) {
-    if (generation != _coreGeneration) {
+    if (generation != _coreGeneration || !globalState.isStart) {
       return;
     }
     final currentGroups = _ref.read(groupsProvider);
@@ -1492,6 +1492,12 @@ class AppController {
       final currentGroups = _ref.read(groupsProvider);
 
       final newGroups = await _retryGetProxiesGroups();
+
+      // 内核已被停止/重置（如套餐到期自动断开）后，本轮读取结果必须丢弃，
+      // 否则旧线路会被写回代理页，出现「已断开但线路还在」。
+      if (generation != _coreGeneration || !globalState.isStart) {
+        return;
+      }
 
       if (newGroups.isEmpty) {
         _handleUpdateGroupsError(
@@ -1567,6 +1573,9 @@ class AppController {
       _applyManagedProxiesStyle();
       applyListIconStyle(newGroups);
 
+      if (generation != _coreGeneration || !globalState.isStart) {
+        return;
+      }
       if (!listEquals(currentGroups, newGroups)) {
         _ref.read(groupsProvider.notifier).value = newGroups;
       }

@@ -84,7 +84,14 @@ class ExpiredSubscriptionGuard {
       await _refreshIfNeeded();
       if (!isExpiredNow) return;
       if (!globalState.isStart) return;
-      await globalState.appController.updateStatus(false);
+      // 强制停核并清空代理运行态（节点/分组），避免断开后代理页仍显示线路
+      await globalState.appController.shutdownAndClearProxies();
+      // 停核过程中可能仍有 in-flight 的节点读取回写，稍后再清一次兜底
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 800), () {
+          globalState.appController.clearProxyRuntime();
+        }),
+      );
       await _notifyAutoStopped();
     } catch (_) {
       // 巡检异常不打断主流程，下一轮继续
