@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:bett_box/clash/clash.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 import 'package:bett_box/common/external_control.dart';
 import 'package:bett_box/l10n/l10n.dart';
 import 'package:bett_box/manager/hotkey_manager.dart';
@@ -251,6 +252,8 @@ class ApplicationState extends ConsumerState<Application>
       }
     }
     globalState.appController.initLink();
+    // 套餐到期巡检：连接中到期时自动断开连接
+    ExpiredSubscriptionGuard.startWatcher();
     if (system.isAndroid) {
       unawaited(app.initShortcuts());
     }
@@ -274,6 +277,10 @@ class ApplicationState extends ConsumerState<Application>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _syncAutoUpdateTasks();
+    if (state == AppLifecycleState.resumed) {
+      // 后台期间定时器可能被系统挂起，回到前台立即补一次到期检查
+      ExpiredSubscriptionGuard.checkNow();
+    }
   }
 
   void _syncAutoUpdateTasks() {

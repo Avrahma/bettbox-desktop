@@ -234,7 +234,7 @@ class _SmartAutoStopManagerState extends ConsumerState<SmartAutoStopManager> {
 
   Future<void> _restartVpn() async {
     // 套餐已过期时不再自动拉起内核（静默跳过，避免后台反复弹窗）
-    if (ExpiredSubscriptionGuard.isExpired) {
+    if (ExpiredSubscriptionGuard.isExpiredNow) {
       commonPrint.warn('Smart Auto Stop: subscription expired, skip restart');
       return;
     }
