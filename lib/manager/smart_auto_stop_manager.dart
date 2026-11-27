@@ -9,6 +9,7 @@ import 'package:bett_box/state.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:synchronized/synchronized.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 
 /// Smart Auto Stop Manager
 class SmartAutoStopManager extends ConsumerStatefulWidget {
@@ -232,6 +233,11 @@ class _SmartAutoStopManagerState extends ConsumerState<SmartAutoStopManager> {
   }
 
   Future<void> _restartVpn() async {
+    // 套餐已过期时不再自动拉起内核（静默跳过，避免后台反复弹窗）
+    if (ExpiredSubscriptionGuard.isExpired) {
+      commonPrint.warn('Smart Auto Stop: subscription expired, skip restart');
+      return;
+    }
     await globalState.appController.updateStatus(true);
   }
 

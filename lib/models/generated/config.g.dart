@@ -513,7 +513,7 @@ _ProxiesStyle _$ProxiesStyleFromJson(Map<String, dynamic> json) =>
           : concurrencyLimitFromJson(json['concurrencyLimit']),
       autoStickyHeader: json['autoStickyHeader'] as bool? ?? false,
       showHiddenItems: json['showHiddenItems'] as bool? ?? false,
-      hideTimeoutProxies: json['hideTimeoutProxies'] as bool? ?? false,
+      hideTimeoutProxies: json['hideTimeoutProxies'] as bool? ?? true,
       hasCustomizedStyle: json['hasCustomizedStyle'] as bool? ?? false,
     );
 

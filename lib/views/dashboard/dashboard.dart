@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'widgets/widgets.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 
 typedef _IsEditWidgetBuilder = Widget Function(bool isEdit);
 
@@ -1006,6 +1007,7 @@ class _DashboardStartSwitchState extends ConsumerState<_DashboardStartSwitch> {
     if (_isDisabled) return;
     final newState =
         ref.read(isSmartStoppedProvider) || ref.read(runTimeProvider) == null;
+    if (newState && await ExpiredSubscriptionGuard.intercept()) return;
     setState(() {
       _isDisabled = true;
       _optimisticStart = newState;

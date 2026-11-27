@@ -15,6 +15,7 @@ import 'package:intl/intl.dart' show Intl;
 
 import 'tile.dart';
 import 'quick_options.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 
 class StartButton extends ConsumerStatefulWidget {
   final DashboardTileSize? size;
@@ -33,6 +34,7 @@ class _StartButtonState extends ConsumerState<StartButton> {
     if (_isDisabled) return;
     final newState =
         ref.read(isSmartStoppedProvider) || ref.read(runTimeProvider) == null;
+    if (newState && await ExpiredSubscriptionGuard.intercept()) return;
     setState(() {
       _isDisabled = true;
       _optimisticStart = newState;

@@ -8,6 +8,7 @@ import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 
 /// 首页「启动开关」方形小卡（约 1:1），用于压缩版快速面板。
 class QuickStartSquare extends ConsumerStatefulWidget {
@@ -24,6 +25,7 @@ class _QuickStartSquareState extends ConsumerState<QuickStartSquare> {
     if (_busy) return;
     final newState =
         ref.read(isSmartStoppedProvider) || ref.read(runTimeProvider) == null;
+    if (newState && await ExpiredSubscriptionGuard.intercept()) return;
     setState(() => _busy = true);
     try {
       await globalState.appController.updateStatus(newState);

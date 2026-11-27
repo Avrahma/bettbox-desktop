@@ -1964,7 +1964,7 @@ return $default(_that.type,_that.sortType,_that.layout,_that.iconStyle,_that.car
 @JsonSerializable()
 
 class _ProxiesStyle implements ProxiesStyle {
-  const _ProxiesStyle({this.type = ProxiesType.tab, this.sortType = ProxiesSortType.none, this.layout = ProxiesLayout.standard, this.iconStyle = ProxiesIconStyle.none, this.cardType = ProxyCardType.expand, this.delayAnimation = DelayAnimationType.pulse, this.syncDelayAnimation = true,  Map<String, String> iconMap = const {}, @JsonKey(fromJson: concurrencyLimitFromJson) this.concurrencyLimit = defaultDelayTestConcurrency, this.autoStickyHeader = false, this.showHiddenItems = false, this.hideTimeoutProxies = false, this.hasCustomizedStyle = false}): _iconMap = iconMap;
+  const _ProxiesStyle({this.type = ProxiesType.tab, this.sortType = ProxiesSortType.none, this.layout = ProxiesLayout.standard, this.iconStyle = ProxiesIconStyle.none, this.cardType = ProxyCardType.expand, this.delayAnimation = DelayAnimationType.pulse, this.syncDelayAnimation = true,  Map<String, String> iconMap = const {}, @JsonKey(fromJson: concurrencyLimitFromJson) this.concurrencyLimit = defaultDelayTestConcurrency, this.autoStickyHeader = false, this.showHiddenItems = false, this.hideTimeoutProxies = true, this.hasCustomizedStyle = false}): _iconMap = iconMap;
   factory _ProxiesStyle.fromJson(Map<String, dynamic> json) => _$ProxiesStyleFromJson(json);
 
 @override@JsonKey() final  ProxiesType type;

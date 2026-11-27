@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bett_box/plugins/tile.dart';
 import 'package:bett_box/state.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 
 class TileManager extends StatefulWidget {
   final Widget child;
@@ -21,8 +22,13 @@ class _TileContainerState extends State<TileManager> with TileListener {
 
   @override
   void onStart() {
-    globalState.appController.updateStatus(true);
+    unawaited(_startIfAllowed());
     super.onStart();
+  }
+
+  Future<void> _startIfAllowed() async {
+    if (await ExpiredSubscriptionGuard.intercept()) return;
+    await globalState.appController.updateStatus(true);
   }
 
   @override
