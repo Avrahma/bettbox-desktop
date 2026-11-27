@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart';
 
 /// 界面元素的可见性控制：
 /// 1. 底部导航「配置」入口对所有用户默认隐藏，首页标题连续点击 3 次临时显示，
-///    显示后 2 秒无操作自动隐藏；首页模块中的「配置」卡片仅按套餐状态决定（已购用户不隐藏）；
+///    显示后 5 秒无操作自动隐藏；首页模块中的「配置」卡片仅按套餐状态决定（已购用户不隐藏）；
 /// 2. 活跃连接、内存信息默认隐藏，由用户在设置中自由开关；
 /// 3. 登录页的服务器地址入口默认隐藏，连续点击站点名 3 次可切换显示/隐藏；
 /// 4.「配置」页的「添加配置」按钮默认隐藏，连续点击标题 3 次可切换显示/隐藏，
@@ -93,7 +93,7 @@ class AppVisibility extends ChangeNotifier {
     }
   }
 
-  /// 首页标题连续点击 3 次：临时显示底部导航「配置」入口，2 秒无操作自动隐藏。
+  /// 首页标题连续点击 3 次：临时显示底部导航「配置」入口，5 秒无操作自动隐藏。
   /// 已购与未购用户均默认隐藏，不做持久化。
   void tapDashboardTitle() {
     final now = DateTime.now();
@@ -128,7 +128,7 @@ class AppVisibility extends ChangeNotifier {
 
   void _restartNavProfileHideTimer() {
     _navProfileHideTimer?.cancel();
-    _navProfileHideTimer = Timer(const Duration(seconds: 2), () {
+    _navProfileHideTimer = Timer(const Duration(seconds: 5), () {
       _navProfileHideTimer = null;
       if (!_navProfileVisible) {
         return;

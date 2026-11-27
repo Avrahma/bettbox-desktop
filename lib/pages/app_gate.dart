@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bett_box/common/app_api.dart';
+import 'package:bett_box/common/app_notice.dart';
 import 'package:bett_box/common/app_subscription_guard.dart';
 import 'package:bett_box/common/app_subscription_importer.dart';
 import 'package:bett_box/common/app_visibility.dart';
@@ -8,6 +9,7 @@ import 'package:bett_box/common/common.dart';
 import 'package:bett_box/models/models.dart';
 import 'package:bett_box/pages/home.dart';
 import 'package:bett_box/pages/login.dart';
+import 'package:bett_box/pages/notice.dart';
 import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/providers/providers.dart';
 import 'package:bett_box/state.dart';
@@ -102,6 +104,14 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
     if (_wasLoggedIn) {
       _startPlanRefreshLoop();
       unawaited(_refreshAndSync());
+      // 冷启动（含从后台彻底退出后重新打开）也自动弹一次公告。
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 600), () async {
+          if (mounted) {
+            await _showLoginNotice();
+          }
+        }),
+      );
     } else {
       // 未登录也必须清空上一账户残留的订阅配置。
       final ids = globalState.config.profiles.map((item) => item.id).toList();
@@ -154,6 +164,23 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
     return urls;
   }
 
+  /// 登录成功后自动弹一次公告（同一会话只弹一次，关闭后记为已读）。
+  Future<void> _showLoginNotice() async {
+    await AppNoticeCenter.instance.refresh();
+    if (!mounted || !AppAuth.instance.loggedIn) {
+      return;
+    }
+    final notice = AppNoticeCenter.instance.notice;
+    if (notice == null || !notice.hasNotice) {
+      return;
+    }
+    if (!AppNoticeCenter.instance.beginAutoShow()) {
+      return;
+    }
+    await showAppNoticeDialog(context);
+    await AppNoticeCenter.instance.markRead();
+  }
+
   void _onAuthChanged() {
     if (!mounted) {
       return;
@@ -173,6 +200,11 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       _wasLoggedIn = true;
       _ownerKey = key;
       _startPlanRefreshLoop();
+      if (ownerChanged) {
+        // 每次新登录都强制弹一次最新公告，不受「已读」记录影响。
+        AppNoticeCenter.instance.resetAutoShow();
+        unawaited(_showLoginNotice());
+      }
       if (switchedAccount) {
         // 直接切换账户（未先退出登录）：先按上一个账户清掉其配置，
         // 避免新账户登录后仍能看到上一个账户的代理线路。
@@ -465,7 +497,7 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       } else {
         // 账号数据里没有 primary，但订阅列表里可能还有可用链接：直接尝试导入，
         // 避免「账户有套餐却没有任何线路」。
-        final imported = await AppSubscriptionImporter.import();
+        final imported = await AppSubscriptionImporter.importAll();
         if (imported.ok) {
           _emptySubTimer?.cancel();
           _emptySubRound = 0;
@@ -482,30 +514,34 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
       return true;
     }
     final url = sub.subUrl.trim();
-    Profile? existing;
-    for (final item in globalState.config.profiles) {
-      if (item.url.trim() == url) {
-        existing = item;
-        break;
-      }
-    }
-    if (existing != null) {
-      _emptySubTimer?.cancel();
-      _emptySubRound = 0;
-      await AppSubscriptionGuard.instance.recordOwner(existing.id, owner);
-      await globalState.appController.addProfile(existing, activate: true);
-      // 已购套餐用户：每次冷启动强制更新一次，运行期每 2 小时更新一次。
-      final force = _forceProfileRefreshPending || forceProfileRefresh;
-      _forceProfileRefreshPending = false;
-      unawaited(_autoRefreshPlanProfile(existing, force: force));
-      return true;
-    }
-    final imported = await AppSubscriptionImporter.import(activate: true);
+    // 首次安装（本机还没有任何配置）时，importAll 已经完成了完整下载，
+    // 不必再紧接着刷新一次，避免启动阶段重复下载造成长时间等待。
+    final hadProfiles = globalState.config.profiles.isNotEmpty;
+    // 账号下所有有效套餐分别导入为独立配置（一个套餐一个配置），
+    // 已在使用的套餐配置不会被自动切换，用户可在「配置」中自行切换。
+    final imported = await AppSubscriptionImporter.importAll(activate: true);
     if (imported.ok) {
       _emptySubTimer?.cancel();
       _emptySubRound = 0;
-      // 新导入的订阅本身就是最新内容，无需再强制刷新。
+      if (!hadProfiles) {
+        _forceProfileRefreshPending = false;
+        return true;
+      }
+      Profile? primaryProfile;
+      for (final item in globalState.config.profiles) {
+        if (item.url.trim() == url) {
+          primaryProfile = item;
+          break;
+        }
+      }
+      if (primaryProfile == null) {
+        _forceProfileRefreshPending = false;
+        return true;
+      }
+      // 已购套餐用户：每次冷启动强制更新一次，运行期每 2 小时更新一次。
+      final force = _forceProfileRefreshPending || forceProfileRefresh;
       _forceProfileRefreshPending = false;
+      unawaited(_autoRefreshPlanProfile(primaryProfile, force: force));
       return true;
     }
     commonPrint.warn('AppGate sync profile failed: ${imported.message}');

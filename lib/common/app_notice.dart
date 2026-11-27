@@ -19,11 +19,29 @@ class AppNoticeCenter extends ChangeNotifier {
   String _readAt = '';
   bool _loading = false;
   bool _restored = false;
+  bool _autoShown = false;
   Future<void>? _inflight;
 
   AppNotice? get notice => _notice;
 
   bool get loading => _loading;
+
+  /// 本次会话（启动 / 登录）是否已经自动弹过公告。
+  bool get autoShown => _autoShown;
+
+  /// 申请一次自动弹窗机会：每次启动或每次登录只自动弹一次，避免重复打扰。
+  bool beginAutoShow() {
+    if (_autoShown) {
+      return false;
+    }
+    _autoShown = true;
+    return true;
+  }
+
+  /// 新登录 / 重新进入前台会话时调用，允许下次自动弹窗。
+  void resetAutoShow() {
+    _autoShown = false;
+  }
 
   /// 是否有未读公告（后台发布了新内容即显示红点）。
   bool get hasUnread {

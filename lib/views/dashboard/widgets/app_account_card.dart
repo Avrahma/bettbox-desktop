@@ -6,8 +6,10 @@ import 'package:bett_box/common/app_subscription_importer.dart';
 import 'package:bett_box/common/common.dart';
 import 'package:bett_box/pages/notice.dart';
 import 'package:bett_box/pages/shop.dart';
+import 'package:bett_box/providers/providers.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// 跟随系统字号轻微放大的间距，与全局 `ap` 规则一致，但不依赖 globalState，
@@ -23,14 +25,14 @@ double _ap(BuildContext context, double value) {
 /// 16 左右内边距的内容区；信息以浅底面板分组，主操作放到底部。
 /// 未开通套餐时只展示账号、余额与「购买套餐」入口；
 /// 已开通套餐时才展示到期时间、剩余时长、流量与「续费 / 管理」入口。
-class AppAccountCard extends StatefulWidget {
+class AppAccountCard extends ConsumerStatefulWidget {
   const AppAccountCard({super.key});
 
   @override
-  State<AppAccountCard> createState() => _AppAccountCardState();
+  ConsumerState<AppAccountCard> createState() => _AppAccountCardState();
 }
 
-class _AppAccountCardState extends State<AppAccountCard> {
+class _AppAccountCardState extends ConsumerState<AppAccountCard> {
   bool _refreshing = false;
   bool _importing = false;
 
@@ -40,14 +42,14 @@ class _AppAccountCardState extends State<AppAccountCard> {
       return;
     }
     setState(() => _importing = true);
-    final result = await AppSubscriptionImporter.import(activate: true);
+    final result = await AppSubscriptionImporter.importAll(activate: true);
     if (!mounted) {
       return;
     }
     setState(() => _importing = false);
     String text;
     if (result.ok) {
-      text = '订阅已导入并启用，可在「配置」中查看线路。';
+      text = '订阅已导入并启用；如需切换套餐，请到首页「配置」模块中选择。';
     } else if (result.noSubscription) {
       text = '当前账号没有可用订阅链接，请先在套餐中心购买或续费。';
     } else {
@@ -73,13 +75,17 @@ class _AppAccountCardState extends State<AppAccountCard> {
     });
   }
 
-  /// 有新公告时自动弹窗（同「购买须知」形式），关闭后记为已读。
+  /// 每次启动 / 每次登录进入首页时自动弹窗展示公告（同一会话只弹一次）。
   Future<void> _autoShowNotice() async {
     await AppNoticeCenter.instance.refresh();
     if (!mounted) {
       return;
     }
-    if (!AppNoticeCenter.instance.hasUnread) {
+    final notice = AppNoticeCenter.instance.notice;
+    if (notice == null || !notice.hasNotice) {
+      return;
+    }
+    if (!AppNoticeCenter.instance.beginAutoShow()) {
       return;
     }
     await showAppNoticeDialog(context);
@@ -127,7 +133,7 @@ class _AppAccountCardState extends State<AppAccountCard> {
       return;
     }
     // 刷新到新套餐/续费结果后，自动补做一次订阅导入，避免只有账号信息没有线路。
-    unawaited(AppSubscriptionImporter.import(activate: true));
+    unawaited(AppSubscriptionImporter.importAll(activate: true));
     unawaited(
       globalState.showMessage(
         title: '提示',
@@ -750,8 +756,44 @@ class _AppAccountCardState extends State<AppAccountCard> {
     );
   }
 
+  /// 找出当前激活配置对应的套餐。
+  ///
+  /// 配置链接与套餐订阅链接一致即视为同一套餐；当前配置不是账号套餐
+  /// （例如手动添加的配置）时退回账号主套餐，保证卡片始终有内容可显示。
+  AppSubscription? _resolveActiveSub(AppAccountData account) {
+    final currentId = globalState.config.currentProfileId;
+    if (currentId != null) {
+      for (final profile in globalState.config.profiles) {
+        if (profile.id != currentId) {
+          continue;
+        }
+        final url = profile.url.trim();
+        if (url.isEmpty) {
+          break;
+        }
+        for (final sub in account.subscriptions) {
+          if (sub.subUrl.trim() == url) {
+            return sub;
+          }
+        }
+        break;
+      }
+    }
+    return account.primary;
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 监听当前选中的配置，切换套餐配置后卡片立即刷新。
+    ref.watch(currentProfileIdProvider);
+    ref.listen<String?>(currentProfileIdProvider, (previous, next) {
+      if (previous == null || next == null || previous == next) {
+        return;
+      }
+      // 切换到另一个套餐的配置后，拉一次最新账号数据，
+      // 让到期时间、剩余时长与流量都与所选套餐对齐。
+      unawaited(AppAuth.instance.refresh());
+    });
     return AnimatedBuilder(
       animation: Listenable.merge([AppAuth.instance, AppNoticeCenter.instance]),
       builder: (context, _) {
@@ -760,7 +802,9 @@ class _AppAccountCardState extends State<AppAccountCard> {
           return const SizedBox.shrink();
         }
         final colorScheme = Theme.of(context).colorScheme;
-        final sub = account.primary;
+        // 展示「当前选中配置」对应的套餐：用户在「配置」中切换套餐后，
+        // 卡片上的套餐名称、到期时间、剩余时长与流量随之切换。
+        final sub = _resolveActiveSub(account);
 
         Color statusColor;
         if (sub == null || sub.expired) {
