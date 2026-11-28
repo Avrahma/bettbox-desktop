@@ -65,6 +65,33 @@ class Vpn {
 
   Future<bool?> stop() => methodChannel.invokeMethod<bool>('stop');
 
+  /// 同步套餐到期时间到原生侧（原生用闹钟在后台也能按时断开）。
+  ///
+  /// [expiresAtMillis] 为 0 表示无到期时间（长期有效/未登录）。
+  Future<bool?> setExpiryDeadline({
+    required int expiresAtMillis,
+    required bool expired,
+  }) => methodChannel.invokeMethod<bool>('setExpiryDeadline', {
+    'expiresAt': expiresAtMillis,
+    'expired': expired,
+  });
+
+  /// 读取并清除「到期已自动断开」标记。
+  Future<bool?> consumeExpiryAutoStop() =>
+      methodChannel.invokeMethod<bool>('consumeExpiryAutoStop');
+
+  /// 到期守护自检信息（闹钟是否挂上、看门狗是否在跑）。
+  Future<String?> expiryStatus() =>
+      methodChannel.invokeMethod<String>('expiryStatus');
+
+  /// 模拟 [seconds] 秒后到期，走真实闹钟 + 看门狗链路自检后台断开。
+  Future<bool?> simulateExpiry({int seconds = 60}) =>
+      methodChannel.invokeMethod<bool>('simulateExpiry', {'seconds': seconds});
+
+  /// 读取并清除「自检模式已完成后台断开」标记。
+  Future<bool?> consumeExpiryTestStop() =>
+      methodChannel.invokeMethod<bool>('consumeExpiryTestStop');
+
   Future<List<String>> getLocalIpAddresses() async {
     return await methodChannel.invokeListMethod<String>(
           'getLocalIpAddresses',

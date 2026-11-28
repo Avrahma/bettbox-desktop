@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import com.appshub.bettbox.GlobalState
 import com.appshub.bettbox.core.Core
 import com.appshub.bettbox.extensions.getIpv4RouteAddress
+import com.appshub.bettbox.expiry.SubscriptionExpiryGuard
 import com.appshub.bettbox.extensions.getIpv6RouteAddress
 import com.appshub.bettbox.extensions.toCIDR
 import com.appshub.bettbox.models.AccessControlMode
@@ -26,10 +27,18 @@ import com.appshub.bettbox.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 class BettboxVpnService : VpnService(), BaseServiceInterface {
     companion object {
         private const val TAG = "BettboxVpnService"
+
+        /** 当前是否有真实的 VPN 服务实例存活（供到期自检展示）。 */
+        @Volatile
+        var isInstanceActive: Boolean = false
+            private set
         private val proxyExclusionPattern =
             Regex("[a-zA-Z0-9*]+(-[a-zA-Z0-9*]+)*(\\.[a-zA-Z0-9*]+(-[a-zA-Z0-9*]+)*)*")
     }
@@ -42,6 +51,37 @@ class BettboxVpnService : VpnService(), BaseServiceInterface {
 
     private var unlockReceiver: BroadcastReceiver? = null
     private val fairMemoryHelper = FairMemoryHelper(TAG)
+
+    @Volatile
+    private var expiryWatchdog: ScheduledExecutorService? = null
+
+    /**
+     * 套餐到期看门狗。
+     *
+     * 独立线程 + 2 秒轮询，不依赖 Flutter 引擎、VpnPlugin 协程作用域或 Dart 定时器，
+     * 即使 App 进程里的引擎被系统回收，只要 VPN 前台服务还在就能按时断开。
+     */
+    private fun startExpiryWatchdog() {
+        if (expiryWatchdog != null) return
+        val executor = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "bettbox-expiry-watchdog").apply { isDaemon = true }
+        }
+        expiryWatchdog = executor
+        runCatching {
+            executor.scheduleWithFixedDelay({
+                runCatching { SubscriptionExpiryGuard.checkNow(applicationContext) }
+            }, 2L, 2L, TimeUnit.SECONDS)
+        }.onFailure {
+            Log.e(TAG, "start expiry watchdog failed: ${it.message}")
+            expiryWatchdog = null
+        }
+    }
+
+    private fun stopExpiryWatchdog() {
+        runCatching { expiryWatchdog?.shutdownNow() }
+        expiryWatchdog = null
+    }
+
     
     @Volatile
     private var isSpeedNotificationEnabled = false
@@ -57,7 +97,10 @@ class BettboxVpnService : VpnService(), BaseServiceInterface {
 
     override fun onCreate() {
         super.onCreate()
+        isInstanceActive = true
         GlobalState.initServiceEngine()
+        startExpiryWatchdog()
+        SubscriptionExpiryGuard.startServerPoller(this)
 
         unlockReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -215,6 +258,8 @@ class BettboxVpnService : VpnService(), BaseServiceInterface {
                 ?.cancel(GlobalState.NOTIFICATION_ID)
         }.onFailure { Log.e(TAG, "Failed to cancel notification: ${it.message}") }
 
+        stopExpiryWatchdog()
+        SubscriptionExpiryGuard.stopServerPoller()
         stopSelf()
     }
 
@@ -354,7 +399,10 @@ class BettboxVpnService : VpnService(), BaseServiceInterface {
     }
 
     override fun onDestroy() {
+        isInstanceActive = false
         stop()
+        stopExpiryWatchdog()
+        SubscriptionExpiryGuard.stopServerPoller()
         unlockReceiver?.let {
             unregisterReceiver(it)
             unlockReceiver = null

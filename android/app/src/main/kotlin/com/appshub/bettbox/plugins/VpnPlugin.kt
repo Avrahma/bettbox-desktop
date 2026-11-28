@@ -21,6 +21,7 @@ import com.appshub.bettbox.BettboxApplication
 import com.appshub.bettbox.GlobalState
 import com.appshub.bettbox.RunState
 import com.appshub.bettbox.core.Core
+import com.appshub.bettbox.expiry.SubscriptionExpiryGuard
 import com.appshub.bettbox.extensions.awaitResult
 import com.appshub.bettbox.extensions.asSocketAddressText
 import com.appshub.bettbox.extensions.resolveDns
@@ -71,6 +72,9 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     private var speedTickerJob: Job? = null
     private val speedTickerLock = Any()
+
+    private var expiryTickerJob: Job? = null
+    private val expiryTickerLock = Any()
 
     private var defaultNetwork: Network? = null
     private var defaultNetworkTracked = false
@@ -195,6 +199,46 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             "stop" -> {
                 handleStop()
                 result.success(true)
+            }
+
+            "setExpiryDeadline" -> {
+                val expiresAt = (call.argument<Number>("expiresAt") ?: 0).toLong()
+                val expired = call.argument<Boolean>("expired") ?: false
+                SubscriptionExpiryGuard.setDeadline(
+                    BettboxApplication.getAppContext(),
+                    expiresAt,
+                    expired,
+                )
+                result.success(true)
+            }
+
+            "consumeExpiryAutoStop" -> {
+                result.success(
+                    SubscriptionExpiryGuard.consumeAutoStopped(BettboxApplication.getAppContext())
+                )
+            }
+
+            "expiryStatus" -> {
+                result.success(
+                    runCatching {
+                        SubscriptionExpiryGuard.statusSnapshot(BettboxApplication.getAppContext())
+                    }.getOrElse { "读取失败：${it.message}" }
+                )
+            }
+
+            "simulateExpiry" -> {
+                val seconds = (call.argument<Number>("seconds") ?: 60).toLong()
+                SubscriptionExpiryGuard.startSimulatedExpiry(
+                    BettboxApplication.getAppContext(),
+                    seconds,
+                )
+                result.success(true)
+            }
+
+            "consumeExpiryTestStop" -> {
+                result.success(
+                    SubscriptionExpiryGuard.consumeTestStop(BettboxApplication.getAppContext())
+                )
             }
 
             "getLocalIpAddresses" -> {
@@ -559,6 +603,8 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             android.util.Log.e("VpnPlugin", "startForeground error: ${e.message}")
         }
         ensureSpeedTicker()
+        ensureExpiryTicker()
+        SubscriptionExpiryGuard.checkNow(BettboxApplication.getAppContext())
     }
 
     fun handleUpdateNotificationSpeed(profileName: String, speedInfo: String) {
@@ -600,6 +646,26 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         synchronized(speedTickerLock) {
             speedTickerJob?.cancel()
             speedTickerJob = null
+        }
+    }
+
+    private fun ensureExpiryTicker() {
+        synchronized(expiryTickerLock) {
+            if (expiryTickerJob?.isActive == true) return
+            expiryTickerJob = scope.launch {
+                while (isActive) {
+                    delay(15_000)
+                    if (GlobalState.currentRunState != RunState.START) break
+                    SubscriptionExpiryGuard.checkNow(BettboxApplication.getAppContext())
+                }
+            }
+        }
+    }
+
+    private fun stopExpiryTicker() {
+        synchronized(expiryTickerLock) {
+            expiryTickerJob?.cancel()
+            expiryTickerJob = null
         }
     }
 
@@ -872,6 +938,7 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
         suspendModule?.uninstall()
         suspendModule = null
+        stopExpiryTicker()
         Core.stopTun()
         serviceRef?.stop()
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.appshub.bettbox.GlobalState
+import com.appshub.bettbox.expiry.SubscriptionExpiryGuard
 
 class BootReceiver : BroadcastReceiver() {
     companion object {
@@ -17,6 +18,10 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
         Log.d(TAG, "Device boot completed, checking autoLaunch setting")
+
+        // 重启会清空 AlarmManager 闹钟，这里重新挂上套餐到期闹钟
+        runCatching { SubscriptionExpiryGuard.reschedule(context) }
+            .onFailure { Log.e(TAG, "reschedule expiry alarm failed", it) }
 
         runCatching {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

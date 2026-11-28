@@ -4,6 +4,7 @@ import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/app_notice.dart';
 import 'package:bett_box/common/app_subscription_importer.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/common/expired_subscription_guard.dart';
 import 'package:bett_box/pages/notice.dart';
 import 'package:bett_box/pages/shop.dart';
 import 'package:bett_box/providers/providers.dart';
@@ -343,6 +344,40 @@ class _AppAccountCardState extends ConsumerState<AppAccountCard> {
   }
 
   /// 单个信息项：上方浅色小标签，下方数值。
+  /// 长按「到期时间」打开的到期守护自检面板：看闹钟有没有挂上、看门狗有没有在跑，
+  /// 并可直接模拟 60 秒后到期来验证后台到点断开。
+  Future<void> _showExpiryGuardPanel(BuildContext context) async {
+    final status = await ExpiredSubscriptionGuard.statusText();
+    final navigatorContext = globalState.navigatorKey.currentContext;
+    if (navigatorContext == null) return;
+    final confirmed = await globalState.showMessage(
+      title: '到期守护自检',
+      message: TextSpan(text: status),
+      cancelText: '关闭',
+      confirmText: '模拟 60 秒后到期',
+    );
+    if (confirmed != true) return;
+    final ok = await ExpiredSubscriptionGuard.simulateExpiry(seconds: 60);
+    if (!ok) {
+      await globalState.showMessage(
+        title: '自检未启动',
+        message: const TextSpan(text: '当前系统不支持模拟到期（仅 Android 端可用）。'),
+        confirmText: '知道了',
+        cancelable: false,
+      );
+      return;
+    }
+    await globalState.showMessage(
+      title: '已开始自检',
+      message: const TextSpan(
+        text: '60 秒后到点：请立刻按 Home 键或锁屏，观察通知栏常驻通知与 VPN 图标是否自动消失。'
+            '回到 App 后会提示自检结果。',
+      ),
+      confirmText: '知道了',
+      cancelable: false,
+    );
+  }
+
   Widget _kv(
     BuildContext context, {
     required String label,
@@ -482,10 +517,14 @@ class _AppAccountCardState extends ConsumerState<AppAccountCard> {
         Row(
           children: [
             Expanded(
-              child: _kv(
-                context,
-                label: '到期时间',
-                value: sub.expiresOn.isEmpty ? '—' : sub.expiresOn,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPress: () => _showExpiryGuardPanel(context),
+                child: _kv(
+                  context,
+                  label: '到期时间',
+                  value: sub.expiresOn.isEmpty ? '—' : sub.expiresOn,
+                ),
               ),
             ),
             _vLine(context),
