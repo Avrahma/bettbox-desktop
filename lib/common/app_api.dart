@@ -592,6 +592,44 @@ class AppDeviceLimitException extends AppApiException {
   final bool canForce;
 }
 
+/// 设备心跳结果（POST /api/app/heartbeat）。
+///
+/// 服务端判定窗口为「最近 5 分钟内有活动」，客户端前台按 90s 轮询。
+/// 非 2xx 响应里的 `code` 必须原样带回，便于上层区分「被踢」「超限」与普通失效。
+class HeartbeatResult {
+  const HeartbeatResult({
+    this.ok = false,
+    this.online = false,
+    this.limit = 0,
+    this.onlineDevices = 0,
+    this.usedDevices = 0,
+    this.statusCode = 0,
+    this.code = '',
+    this.message = '',
+  });
+
+  final bool ok;
+  final bool online;
+
+  /// 设备名额上限，0 表示不限制。
+  final int limit;
+  final int onlineDevices;
+  final int usedDevices;
+
+  final int statusCode;
+  final String code;
+  final String message;
+
+  /// 401 + DEVICE_KICKED：本机已被移出登录状态。
+  bool get kicked => statusCode == 401 && code == 'DEVICE_KICKED';
+
+  /// 409 + DEVICE_LIMIT：本机未登记上，需引导用户强制退出其他设备后重新登录。
+  bool get limitReached => statusCode == 409 || code == 'DEVICE_LIMIT';
+
+  /// 401 且不是被踢：token 过期，走统一登录失效流程。
+  bool get tokenInvalid => statusCode == 401 && !kicked;
+}
+
 /// 余额支付下单失败：余额不足时带上缺口金额，便于引导去充值。
 class AppPurchaseException extends AppApiException {
   AppPurchaseException(
@@ -1400,7 +1438,12 @@ class AppAuth extends ChangeNotifier {
     String token = 'debug-token',
     String ticket = 'debug-ticket',
     Map<String, dynamic>? accountJson,
+    String? baseUrl,
   }) {
+    if (baseUrl != null && baseUrl.trim().isNotEmpty) {
+      // 测试注入，不落盘（避免测试环境依赖 path_provider）。
+      _baseUrl = _normalizeBase(baseUrl);
+    }
     _token = token;
     _ticket = ticket;
     _account = accountJson == null
@@ -1408,6 +1451,80 @@ class AppAuth extends ChangeNotifier {
         : AppAccountData.fromJson(accountJson);
     _restored = true;
     notifyListeners();
+  }
+
+  /// 设备心跳：把本机标记为「在线」（服务端按最近 5 分钟活动判定）。
+  ///
+  /// 设备标识与登录、/api/app/profile 完全同源（同一份 DeviceIdentity），
+  /// 不另生成 ID，避免后台出现幽灵设备。网络异常向上抛出，由调度层静默退避。
+  Future<HeartbeatResult> heartbeat() async {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      return const HeartbeatResult(statusCode: 401, code: 'NO_TOKEN');
+    }
+    final device = await DeviceIdentity.load();
+    final response = await _dio()
+        .post<dynamic>(
+          '/api/app/heartbeat',
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $token',
+              'X-Device-Id': device.id,
+              'X-Device-Platform': device.platform,
+              'X-Device-Name': device.name,
+            },
+            receiveTimeout: const Duration(seconds: 10),
+            sendTimeout: const Duration(seconds: 10),
+          ),
+        )
+        .timeout(const Duration(seconds: 10));
+    final raw = response.data;
+    final data = raw is Map
+        ? Map<String, dynamic>.from(raw)
+        : const <String, dynamic>{};
+    final statusCode = response.statusCode ?? 0;
+    return HeartbeatResult(
+      ok: statusCode >= 200 && statusCode < 300 && data['ok'] == true,
+      online: data['online'] == true,
+      limit: (data['limit'] as num?)?.toInt() ?? 0,
+      onlineDevices: (data['online_devices'] as num?)?.toInt() ?? 0,
+      usedDevices: (data['used_devices'] as num?)?.toInt() ?? 0,
+      statusCode: statusCode,
+      code: data['code']?.toString() ?? '',
+      message: data['error']?.toString() ?? '',
+    );
+  }
+
+  /// 被服务端踢下线 / 超出设备名额时清理本地登录态，并给登录页留一条提示。
+  /// 与 [logout] 的区别：不再请求 /api/app/logout（服务端已不认本机会话）。
+  Future<void> forceLogout(String notice) async {
+    final text = notice.trim();
+    if (text.isNotEmpty) {
+      _loginNotice = text;
+    }
+    _token = null;
+    _ticket = null;
+    _account = null;
+    notifyListeners();
+
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => null,
+      );
+      if (prefs == null) {
+        return;
+      }
+      for (final key in const [_kToken, _kTicket, _kAccount]) {
+        try {
+          await prefs.remove(key).timeout(const Duration(seconds: 2));
+        } catch (e) {
+          commonPrint.warn('AppAuth forceLogout remove $key failed: $e');
+        }
+      }
+    } catch (e) {
+      commonPrint.warn('AppAuth forceLogout persist failed: $e');
+    }
   }
 
   Future<void> logout() async {

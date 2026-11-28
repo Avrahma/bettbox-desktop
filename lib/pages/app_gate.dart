@@ -6,6 +6,7 @@ import 'package:bett_box/common/app_subscription_guard.dart';
 import 'package:bett_box/common/app_subscription_importer.dart';
 import 'package:bett_box/common/app_visibility.dart';
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/common/heartbeat_service.dart';
 import 'package:bett_box/models/models.dart';
 import 'package:bett_box/pages/home.dart';
 import 'package:bett_box/pages/login.dart';
@@ -95,6 +96,8 @@ class _AppGateState extends State<AppGate> with WidgetsBindingObserver {
 
   Future<void> _boot() async {
     await AppAuth.instance.restore();
+    // 设备心跳：冷启动已登录立即发一次，随后前台 90s 轮询。
+    HeartbeatService.instance.attach();
     if (!mounted) {
       return;
     }
