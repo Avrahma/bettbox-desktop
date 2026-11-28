@@ -53,7 +53,7 @@ void main(List<String> arguments) async {
   final appVersion = versionMatch.group(1)!;
   print('App Version: $appVersion');
 
-  final outputBaseName = 'Bettbox-$appVersion-windows-$desc-setup';
+  final outputBaseName = 'Nexto-$appVersion-windows-$desc-setup';
 
   // 2. Parse make_config.yaml
   final configFile = File('windows/packaging/exe/make_config.yaml');
@@ -109,7 +109,7 @@ void main(List<String> arguments) async {
     'APP_NAME': makeConfig['app_name'],
     'APP_VERSION': appVersion,
     'EXECUTABLE_NAME': makeConfig['executable_name'] ?? 'Bettbox.exe',
-    'DISPLAY_NAME': makeConfig['display_name'] ?? 'Bettbox',
+    'DISPLAY_NAME': makeConfig['display_name'] ?? 'Nexto',
     'PUBLISHER_NAME': makeConfig['publisher'] ?? 'appshub.cc',
     'ARCH': arch == 'arm64' ? 'arm64' : 'x64',
     'PUBLISHER_URL':
@@ -117,7 +117,8 @@ void main(List<String> arguments) async {
     'CREATE_DESKTOP_ICON': true,
     'LAUNCH_AT_STARTUP': true,
     'INSTALL_DIR_NAME':
-        '{autopf64}\\${makeConfig['display_name'] ?? 'Bettbox'}',
+        makeConfig['install_dir_name'] ??
+        '{autopf64}\\${makeConfig['display_name'] ?? 'Nexto'}',
     'SOURCE_DIR': sourceDir,
     'OUTPUT_BASE_FILENAME': outputBaseName,
     'LOCALES': locales,
@@ -221,7 +222,7 @@ void main(List<String> arguments) async {
     }
 
     final portableOutputBaseName =
-        'Bettbox-$appVersion-windows-$desc-portable.zip';
+        'Nexto-$appVersion-windows-$desc-portable.zip';
     final targetPortableZipPath = path.join('dist', portableOutputBaseName);
     final targetPortableFile = File(targetPortableZipPath);
     if (targetPortableFile.existsSync()) {
@@ -231,7 +232,7 @@ void main(List<String> arguments) async {
     print('Creating portable zip: $targetPortableZipPath');
     try {
       final zipFileEncoder = ZipFileEncoder()..create(targetPortableZipPath);
-      final rootName = makeConfig['display_name'] ?? 'Bettbox';
+      final rootName = makeConfig['display_name'] ?? 'Nexto';
       final entries = Directory(sourceDir)
           .listSync(recursive: true, followLinks: true);
       for (final entry in entries.whereType<File>()) {
