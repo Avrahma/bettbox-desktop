@@ -20,7 +20,7 @@ typedef String MessageIfAbsent(String messageStr, List<dynamic> args);
 class MessageLookup extends MessageLookupByLibrary {
   String get localeName => 'zh_CN';
 
-  static String m0(log) => "分析Bettbox(Mihomo)日志:${log}";
+  static String m0(log) => "分析Nexto(Mihomo)日志:${log}";
 
   static String m1(error) => "自动备份失败：${error}";
 
@@ -499,7 +499,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "deleteTip": m12,
     "deleteTunnel": MessageLookupByLibrary.simpleMessage("删除转发"),
     "desc": MessageLookupByLibrary.simpleMessage(
-      "Bettbox 基于强大灵活的 Mihomo 内核深度打造，致力于更好的客户端体验，我们的愿景: Connecting Open Source and AI，Accelerating Innovation",
+      "Nexto 基于强大灵活的 Mihomo 内核深度打造，致力于更好的客户端体验，我们的愿景: Connecting Open Source and AI，Accelerating Innovation",
     ),
     "destination": MessageLookupByLibrary.simpleMessage("目标地址"),
     "destinationGeoIP": MessageLookupByLibrary.simpleMessage("目标地理定位"),
@@ -879,7 +879,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "iperfErrorUdp": MessageLookupByLibrary.simpleMessage("UDP 握手失败，可能被防火墙拦截"),
     "iperfErrorUnreachable": MessageLookupByLibrary.simpleMessage("无法连接到服务器"),
     "iperfFirewallTip": MessageLookupByLibrary.simpleMessage(
-      "如果其他设备连接不上，请在系统防火墙中允许 Bettbox 内核的传入连接。",
+      "如果其他设备连接不上，请在系统防火墙中允许 Nexto 内核的传入连接。",
     ),
     "iperfLostPackets": m29,
     "iperfNoAddress": MessageLookupByLibrary.simpleMessage(
@@ -901,7 +901,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "iperfRunning": MessageLookupByLibrary.simpleMessage("测试中"),
     "iperfScan": MessageLookupByLibrary.simpleMessage("扫码连接"),
     "iperfScanHint": MessageLookupByLibrary.simpleMessage(
-      "在另一台设备的 Bettbox 中扫码，即可一键连接",
+      "在另一台设备的 Nexto 中扫码，即可一键连接",
     ),
     "iperfScanInvalid": MessageLookupByLibrary.simpleMessage(
       "这不是 iPerf3 连接二维码",

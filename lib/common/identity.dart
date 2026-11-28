@@ -10,7 +10,7 @@ class AppIdentity {
   static const packageId = 'com.appshub.bettbox';
 
   static const compactName = isDev ? '$productName$devSuffix' : productName;
-  static const displayName = isDev ? 'Box PRE Dev' : 'Box PRE';
+  static const displayName = isDev ? 'Nexto Dev' : 'Nexto';
   static const mainExecutableName = productName;
   static const coreExecutableName = '${compactName}Core';
   static const dataDirName = compactName;

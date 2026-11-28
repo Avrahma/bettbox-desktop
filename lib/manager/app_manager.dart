@@ -539,7 +539,7 @@ class AppSidebarContainer extends ConsumerWidget {
     if (system.isMacOS) return itemsWidth;
     final brandPainter = TextPainter(
       text: TextSpan(
-        text: AppIdentity.productName,
+        text: AppIdentity.displayName,
         style: _brandTextStyle(context),
       ),
       textDirection: direction,
@@ -654,7 +654,7 @@ class AppSidebarContainer extends ConsumerWidget {
                       : Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: Text(
-                            AppIdentity.productName,
+                            AppIdentity.displayName,
                             maxLines: 1,
                             softWrap: false,
                             style: _brandTextStyle(context),

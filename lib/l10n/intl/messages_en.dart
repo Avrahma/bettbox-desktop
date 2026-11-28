@@ -20,7 +20,7 @@ typedef String MessageIfAbsent(String messageStr, List<dynamic> args);
 class MessageLookup extends MessageLookupByLibrary {
   String get localeName => 'en';
 
-  static String m0(log) => "Analyze Bettbox (Mihomo) log: ${log}";
+  static String m0(log) => "Analyze Nexto (Mihomo) log: ${log}";
 
   static String m1(error) => "Auto backup failed: ${error}";
 
@@ -661,7 +661,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "deleteTip": m12,
     "deleteTunnel": MessageLookupByLibrary.simpleMessage("Delete Forwarding"),
     "desc": MessageLookupByLibrary.simpleMessage(
-      "Bettbox is deeply crafted on the powerful and flexible Mihomo kernel, dedicated to a superior client experience. Our vision: Connecting Open Source and AI, Accelerating Innovation",
+      "Nexto is deeply crafted on the powerful and flexible Mihomo kernel, dedicated to a superior client experience. Our vision: Connecting Open Source and AI, Accelerating Innovation",
     ),
     "destination": MessageLookupByLibrary.simpleMessage("Destination"),
     "destinationGeoIP": MessageLookupByLibrary.simpleMessage(
@@ -1185,7 +1185,7 @@ class MessageLookup extends MessageLookupByLibrary {
       "Can\'t reach the server",
     ),
     "iperfFirewallTip": MessageLookupByLibrary.simpleMessage(
-      "If other devices can\'t connect, allow incoming connections for the Bettbox core in your system firewall.",
+      "If other devices can\'t connect, allow incoming connections for the Nexto core in your system firewall.",
     ),
     "iperfLostPackets": m29,
     "iperfNoAddress": MessageLookupByLibrary.simpleMessage(
@@ -1209,7 +1209,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "iperfRunning": MessageLookupByLibrary.simpleMessage("Testing"),
     "iperfScan": MessageLookupByLibrary.simpleMessage("Scan to connect"),
     "iperfScanHint": MessageLookupByLibrary.simpleMessage(
-      "Scan with Bettbox on another device to connect in one tap",
+      "Scan with Nexto on another device to connect in one tap",
     ),
     "iperfScanInvalid": MessageLookupByLibrary.simpleMessage(
       "This isn\'t an iPerf3 connection QR code",
