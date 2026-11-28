@@ -143,9 +143,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
 #ifdef BETTBOX_DEV
-  const wchar_t *window_title = L"Box PRE Dev";
+  const wchar_t *window_title = L"Nexto Dev";
 #else
-  const wchar_t *window_title = L"Box PRE";
+  const wchar_t *window_title = L"Nexto";
 #endif
   if (!window.Create(window_title, origin, size, !is_control_command)) {
     return EXIT_FAILURE;

@@ -64,6 +64,7 @@ const List<DashboardWidget> defaultAndroidDashboardWidgets = [
   DashboardWidget.connectionsCount,
   DashboardWidget.memoryInfo,
   DashboardWidget.trafficUsage,
+  DashboardWidget.outboundModeV2,
 ];
 
 const Map<String, String> defaultAndroidDashboardSizes = {
@@ -72,6 +73,7 @@ const Map<String, String> defaultAndroidDashboardSizes = {
   'connectionsCount': 'tall',
   'memoryInfo': 'tall',
   'trafficUsage': 'wide',
+  'outboundModeV2': 'wide',
   'mediaUnlockSmall': 'large',
 };
 

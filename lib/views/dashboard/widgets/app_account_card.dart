@@ -169,7 +169,10 @@ class _AppAccountCardState extends ConsumerState<AppAccountCard> {
           TextButton(
             onPressed: () =>
                 Navigator.of(context, rootNavigator: true).pop(true),
-            child: const Text('退出'),
+            child: Text(
+              '退出',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ),
         ],
       ),
@@ -268,17 +271,21 @@ class _AppAccountCardState extends ConsumerState<AppAccountCard> {
                 : const AppIcon(Icons.refresh, size: 19),
           ),
           const SizedBox(width: 10),
-          IconButton(
+          TextButton(
             onPressed: () => unawaited(_logout()),
-            tooltip: '退出登录',
-            visualDensity: VisualDensity.compact,
-            style: IconButton.styleFrom(
+            style: TextButton.styleFrom(
               minimumSize: const Size(32, 32),
-              padding: EdgeInsets.zero,
+              padding: EdgeInsets.symmetric(horizontal: _ap(context, 6)),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
               foregroundColor: colorScheme.onSurfaceVariant,
             ),
-            icon: const AppIcon(Icons.logout, size: 19),
+            child: Text(
+              '退出',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
           ),
         ],
       ),

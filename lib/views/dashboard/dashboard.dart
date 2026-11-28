@@ -45,9 +45,57 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   /// 串行执行布局迁移，避免多次迁移并发读写尺寸表互相覆盖。
   Future<void> _runDashboardMigrations() async {
     await _maybeNormalizeStoredWidgets();
+    await _maybeInsertOutboundModeV2();
     await _maybeMigrateDesktopLayout();
     await _maybeMigrateLayout();
     await _maybeForceMediaUnlockLarge();
+  }
+
+  static const String _kOutboundModeNativeV1 =
+      'app_dashboard_outbound_native_v1';
+
+  /// 首页「运行模式」模块统一使用软件原生版式（OutboundModeV2 整行卡），
+  /// 位于流量统计下方（幂等）。
+  Future<void> _maybeInsertOutboundModeV2() async {
+    try {
+      final prefs = await preferences.sharedPreferencesCompleter.future;
+      if (prefs == null || (prefs.getBool(_kOutboundModeNativeV1) ?? false)) {
+        return;
+      }
+      final widgets = [..._currentWidgets()];
+      final family = DashboardWidget.outboundModeV2.family;
+      final existsIndex = widgets.indexWhere((item) => item.family == family);
+      if (existsIndex < 0) {
+        final trafficIndex = widgets.indexWhere(
+          (item) => item.family == DashboardWidget.trafficUsage.family,
+        );
+        if (trafficIndex >= 0) {
+          widgets.insert(trafficIndex + 1, DashboardWidget.outboundModeV2);
+        } else {
+          widgets.add(DashboardWidget.outboundModeV2);
+        }
+      } else {
+        // 旧版自定义横卡已移除，统一回落为原生整行卡并贴到流量统计下方。
+        widgets[existsIndex] = DashboardWidget.outboundModeV2;
+        final index = widgets.indexOf(DashboardWidget.outboundModeV2);
+        final trafficIndex = widgets.indexWhere(
+          (item) => item.family == DashboardWidget.trafficUsage.family,
+        );
+        if (trafficIndex >= 0 && index != trafficIndex + 1) {
+          widgets.removeAt(index);
+          widgets.insert(trafficIndex + 1, DashboardWidget.outboundModeV2);
+        }
+      }
+      if (!mounted) return;
+      _saveWidgets(
+        widgets,
+        sizes: {..._currentSizes()}
+          ..['outboundModeV2'] = DashboardTileSize.wide.name,
+      );
+      await prefs.setBool(_kOutboundModeNativeV1, true);
+    } catch (_) {
+      // 迁移失败不影响正常使用。
+    }
   }
 
   /// 清理历史版本遗留的重复组件（同族多份 / 重复启动开关），
@@ -1190,7 +1238,7 @@ class _PreviewMark extends StatelessWidget {
         border: Border.all(color: colorScheme.primary.withValues(alpha: 0.6)),
       ),
       child: Text(
-        kDebugMode ? 'DEBUG' : 'PRE',
+        kDebugMode ? 'DEBUG' : 'PRF',
         style: context.textTheme.labelSmall?.copyWith(
           fontSize: 9.5,
           height: 1.3,
