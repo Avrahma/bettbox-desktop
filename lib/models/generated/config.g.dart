@@ -54,7 +54,7 @@ _AppSettingProps _$AppSettingPropsFromJson(
   startSwitchOffLabel: json['startSwitchOffLabel'] as String?,
   enableNavBarHapticFeedback:
       json['enableNavBarHapticFeedback'] as bool? ?? true,
-  autoCheckUpdate: json['autoCheckUpdate'] as bool? ?? true,
+  autoCheckUpdate: json['autoCheckUpdate'] as bool? ?? false,
   autoDownloadUpdate: json['autoDownloadUpdate'] as bool? ?? true,
   showLabel: json['showLabel'] as bool? ?? false,
   disclaimerAccepted: json['disclaimerAccepted'] as bool? ?? false,

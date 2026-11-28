@@ -5,9 +5,11 @@ import 'dart:io';
 import 'package:bett_box/common/device_identity.dart';
 import 'package:bett_box/common/preferences.dart';
 import 'package:bett_box/common/print.dart';
+import 'package:bett_box/common/token_vault.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 账户订阅流量信息，来自订阅响应头 subscription-userinfo。
 class AppTraffic {
@@ -889,7 +891,7 @@ class AppAuth extends ChangeNotifier {
           _baseUrl = normalized;
         }
       }
-      _token = prefs?.getString(_kToken);
+      _token = await _restoreToken(prefs);
       _ticket = prefs?.getString(_kTicket);
       final raw = prefs?.getString(_kAccount);
       if (raw != null && raw.isNotEmpty) {
@@ -1508,13 +1510,24 @@ class AppAuth extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final prefs = await preferences.sharedPreferencesCompleter.future.timeout(
+      var prefs = await preferences.sharedPreferencesCompleter.future.timeout(
         const Duration(seconds: 3),
         onTimeout: () => null,
       );
+      // 首次超时说明 prefs 初始化偏慢，再给一次机会：
+      // 磁盘上的 token 若没清掉，下次冷启动会带着旧 token 再次被踢，
+      // 表现为「每次打开都被登出」且无法自愈。
+      prefs ??= await preferences.sharedPreferencesCompleter.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
       if (prefs == null) {
+        commonPrint.warn(
+          'AppAuth forceLogout: prefs unavailable, token may remain on disk',
+        );
         return;
       }
+      await TokenVault.clear();
       for (final key in const [_kToken, _kTicket, _kAccount]) {
         try {
           await prefs.remove(key).timeout(const Duration(seconds: 2));
@@ -1548,6 +1561,7 @@ class AppAuth extends ChangeNotifier {
       if (prefs == null) {
         return;
       }
+      await TokenVault.clear();
       for (final key in const [_kToken, _kTicket, _kAccount]) {
         try {
           await prefs.remove(key).timeout(const Duration(seconds: 2));
@@ -1580,6 +1594,24 @@ class AppAuth extends ChangeNotifier {
     }
   }
 
+  /// 读取 token：优先 Keystore 加密文件；老版本明文 token 自动迁移，
+  /// 迁移成功后再删掉 prefs 里的明文副本。
+  Future<String?> _restoreToken(SharedPreferences? prefs) async {
+    final encrypted = await TokenVault.read();
+    if (encrypted != null && encrypted.isNotEmpty) {
+      return encrypted;
+    }
+    final legacy = prefs?.getString(_kToken);
+    if (legacy == null || legacy.isEmpty) {
+      return legacy;
+    }
+    final migrated = await TokenVault.write(legacy);
+    if (migrated) {
+      await prefs?.remove(_kToken);
+    }
+    return legacy;
+  }
+
   Future<void> _persist() async {
     final prefs = await preferences.sharedPreferencesCompleter.future;
     if (prefs == null) {
@@ -1587,7 +1619,14 @@ class AppAuth extends ChangeNotifier {
     }
     await prefs.setString(_kBase, _baseUrl);
     if (_token != null) {
-      await prefs.setString(_kToken, _token!);
+      // 优先写入 Android Keystore 加密文件；失败才回退明文 prefs，
+      // 保证任何机型上登录态都能持久化（行为与改动前一致）。
+      final saved = await TokenVault.write(_token!);
+      if (saved) {
+        await prefs.remove(_kToken);
+      } else {
+        await prefs.setString(_kToken, _token!);
+      }
     }
     if (_ticket != null) {
       await prefs.setString(_kTicket, _ticket!);

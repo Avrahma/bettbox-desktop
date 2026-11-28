@@ -114,7 +114,34 @@ class AppSubscriptionImporter {
   }
 
   /// 强制直连下载订阅内容，绕开可能尚未就绪的内核代理。
+  ///
+  /// 默认校验 TLS；仅当订阅源证书不完整（自签/缺中间证书）导致握手失败时，
+  /// 才降级为不校验证书的客户端，保持与历史版本一致的可用性。
   static Future<Uint8List> _downloadDirect(String url) async {
+    Response<List<int>> response;
+    try {
+      response = await _directDio(insecure: false).get<List<int>>(
+        url,
+        options: Options(responseType: ResponseType.bytes),
+      );
+    } on DioException catch (e) {
+      if (e.error is! HandshakeException) rethrow;
+      commonPrint.warn(
+        'Subscription TLS verification failed, retrying insecure: $url',
+      );
+      response = await _directDio(insecure: true).get<List<int>>(
+        url,
+        options: Options(responseType: ResponseType.bytes),
+      );
+    }
+    final data = response.data;
+    if (data == null || data.isEmpty) {
+      throw const FormatException('订阅内容为空');
+    }
+    return Uint8List.fromList(data);
+  }
+
+  static Dio _directDio({required bool insecure}) {
     final dio = Dio(
       BaseOptions(
         connectTimeout: const Duration(seconds: 12),
@@ -127,21 +154,15 @@ class AppSubscriptionImporter {
       createHttpClient: () {
         final client = HttpClient();
         client.findProxy = (_) => 'DIRECT';
-        client.badCertificateCallback = (_, _, _) => true;
+        if (insecure) {
+          client.badCertificateCallback = (_, _, _) => true;
+        }
         client.connectionTimeout = const Duration(seconds: 12);
         client.userAgent = globalState.ua;
         return client;
       },
     );
-    final response = await dio.get<List<int>>(
-      url,
-      options: Options(responseType: ResponseType.bytes),
-    );
-    final data = response.data;
-    if (data == null || data.isEmpty) {
-      throw const FormatException('订阅内容为空');
-    }
-    return Uint8List.fromList(data);
+    return dio;
   }
 
   static String _describe(Object error) {

@@ -212,7 +212,7 @@ abstract class AppSettingProps with _$AppSettingProps {
     String? startSwitchOnLabel,
     String? startSwitchOffLabel,
     @Default(true) bool enableNavBarHapticFeedback,
-    @Default(true) bool autoCheckUpdate,
+    @Default(false) bool autoCheckUpdate,
     @Default(true) bool autoDownloadUpdate,
     @Default(false) bool showLabel,
     @Default(false) bool disclaimerAccepted,

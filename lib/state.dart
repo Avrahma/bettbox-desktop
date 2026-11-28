@@ -687,6 +687,20 @@ class GlobalState {
       await prefs.setBool(hideTimeoutProxiesKey, true);
     }
 
+    // 定制：自动检查更新已禁用，老配置一次性对齐为关闭，
+    // 避免设置页显示“已开启”但实际不检查造成误解。
+    const autoCheckUpdateOffKey = 'app_custom_auto_check_update_off_v1';
+    if (prefs != null && !(prefs.getBool(autoCheckUpdateOffKey) ?? false)) {
+      if (config.appSetting.autoCheckUpdate) {
+        config = config.copyWith(
+          appSetting: config.appSetting.copyWith(autoCheckUpdate: false),
+        );
+        await preferences.saveConfig(config);
+        this.config = config;
+      }
+      await prefs.setBool(autoCheckUpdateOffKey, true);
+    }
+
     final synced = config.managedProps.syncedVersion;
     if (synced != null && !ManagedScript.isCustom(config.managedProps)) {
       await ManagedScript.restore();

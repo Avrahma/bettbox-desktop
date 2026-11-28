@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:bett_box/common/app_api.dart';
 import 'package:bett_box/common/print.dart';
-import 'package:bett_box/common/system.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 
@@ -26,8 +25,11 @@ class HeartbeatService with WidgetsBindingObserver {
   /// 前台心跳间隔：服务端在线窗口 5 分钟，90s 留足冗余。
   static const Duration foregroundInterval = Duration(seconds: 90);
 
-  /// 桌面端窗口最小化后的保活间隔。
-  static const Duration desktopIdleInterval = Duration(minutes: 5);
+  /// 后台/桌面最小化后的保活间隔。
+  ///
+  /// 服务端在线窗口为 5 分钟，这里取 4 分钟留出网络抖动余量，
+  /// 避免卡在窗口边界被判离线、名额被其他设备占用。
+  static const Duration desktopIdleInterval = Duration(minutes: 4);
 
   static const Duration _retry120 = Duration(seconds: 120);
   static const Duration _retry180 = Duration(seconds: 180);
@@ -75,21 +77,23 @@ class HeartbeatService with WidgetsBindingObserver {
       _restart(immediate: true, interval: foregroundInterval);
       return;
     }
-    if (system.isDesktop) {
-      // 桌面端窗口失焦/最小化：降频保活，正常运行时仍保持 90s。
-      _restart(immediate: false, interval: desktopIdleInterval);
-      return;
-    }
-    // Android / iOS 必须停发，否则会被系统限流。
-    _cancelTimer();
+    // 后台/最小化不再停发，改为降频保活：间隔 4 分钟，仍落在服务端
+    // 5 分钟在线窗口内，保证后台挂机时设备依然算在线。
+    _restart(immediate: false, interval: desktopIdleInterval);
   }
 
   /// 登录态变化（登录成功、退出登录、切换账号）时同步调度状态。
   void _onAuthChanged() {
     final token = AppAuth.instance.token;
+    // 只有「换到新的有效 token」才解除停机标记。
+    // 被踢/超限触发的 forceLogout 会把 token 置空，此处不能借机复位，
+    // 否则会在后台重新开始轮询，形成「被踢 → 重启 → 再被踢」的循环。
+    final switchedToNewToken =
+        token != null && token.isNotEmpty && token != _lastToken;
     if (token != _lastToken) {
       _lastToken = token;
-      // 新账号/重新登录：清掉上一次的停机与退避状态。
+    }
+    if (switchedToNewToken) {
       _halted = false;
       _failureStreak = 0;
     }
@@ -106,9 +110,6 @@ class HeartbeatService with WidgetsBindingObserver {
       return;
     }
     if (_lifecycle != AppLifecycleState.resumed) {
-      if (!system.isDesktop) {
-        return;
-      }
       _restart(immediate: false, interval: desktopIdleInterval);
       return;
     }
@@ -148,10 +149,11 @@ class HeartbeatService with WidgetsBindingObserver {
   }
 
   /// 下一次请求的间隔：成功 90s；连续失败 120s、最长 180s。
+  /// 非前台（后台/最小化）统一走保活间隔，与平台无关。
   Duration get _nextDelay {
     switch (_failureStreak) {
       case 0:
-        return _lifecycle == AppLifecycleState.resumed || !system.isDesktop
+        return _lifecycle == AppLifecycleState.resumed
             ? foregroundInterval
             : desktopIdleInterval;
       case 1:
@@ -174,15 +176,15 @@ class HeartbeatService with WidgetsBindingObserver {
     try {
       final result = await AppAuth.instance.heartbeat();
       if (result.kicked) {
-        _halt('该设备已被移出登录状态，请重新登录', '');
+        _halt('该设备已被移出登录状态，请重新登录', result.message);
         return;
       }
       if (result.limitReached) {
-        _halt('该账号已在其他设备登录，请重新登录时选择「强制退出其他设备」', '');
+        _halt('该账号已在其他设备登录，请重新登录时选择「强制退出其他设备」', result.message);
         return;
       }
       if (result.tokenInvalid) {
-        _halt('登录已失效，请重新登录', '');
+        _halt('登录已失效，请重新登录', result.message);
         return;
       }
       // 200：只更新内部状态，静默。

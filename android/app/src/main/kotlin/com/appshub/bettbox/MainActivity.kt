@@ -91,6 +91,9 @@ class MainActivity : FlutterActivity() {
         }
         return app.engineGroup.createAndRunEngine(options).apply {
             GeneratedPluginRegistrant.registerWith(this)
+            // provideFlutterEngine 返回缓存引擎时宿主不会回调
+            // configureFlutterEngine，这里也注册一次，保证 token 加密通道可用。
+            TokenVault(app).register(dartExecutor.binaryMessenger)
             cache.put(MAIN_ENGINE_ID, this)
             GlobalState.flutterEngine = this
         }
@@ -106,6 +109,7 @@ class MainActivity : FlutterActivity() {
         }
 
         setupHapticsChannel(flutterEngine)
+        TokenVault(applicationContext).register(flutterEngine.dartExecutor.binaryMessenger)
 
         GlobalState.flutterEngine = flutterEngine
     }

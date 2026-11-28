@@ -39,6 +39,12 @@ class Request {
 
   late final Dio _dio;
   late final Dio _clashDio;
+
+  /// 仅在 [_clashDio] 证书校验失败后启用的降级客户端。
+  ///
+  /// 保留旧行为（接受自签/证书链不完整的订阅源），但不再默认关闭校验：
+  /// 正常证书走严格校验，只有握手失败才降级，避免公网中间人默认生效。
+  late final Dio _clashFallbackDio;
   String? userAgent;
 
   Request() {
@@ -52,6 +58,18 @@ class Request {
     );
     _clashDio = Dio();
     _clashDio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: () {
+        final client = HttpClient();
+        client.autoUncompress = false;
+        client.findProxy = (Uri uri) {
+          client.userAgent = globalState.ua;
+          return BettboxHttpOverrides.handleFindProxy(uri);
+        };
+        return client;
+      },
+    );
+    _clashFallbackDio = Dio();
+    _clashFallbackDio.httpClientAdapter = IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
         client.autoUncompress = false;
@@ -166,18 +184,50 @@ class Request {
     );
   }
 
+  /// file:// 订阅会被当作配置读入并落盘，必须拦住能读到本机密钥与系统文件的路径。
+  static const List<String> _blockedLocalRoots = [
+    '/data/data',
+    '/data/user',
+    '/data/misc',
+    '/data/system',
+    '/proc',
+    '/sys',
+    '/dev',
+    '/system',
+    '/vendor',
+    '/product',
+  ];
+
+  String _guardLocalFilePath(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    if (normalized.split('/').contains('..')) {
+      throw Exception('Local file url with parent directory is not allowed');
+    }
+    // 只校验本机绝对路径；UNC(//host/share) 与盘符路径保持原行为。
+    if (normalized.startsWith('/') && !normalized.startsWith('//')) {
+      for (final root in _blockedLocalRoots) {
+        if (normalized == root || normalized.startsWith('$root/')) {
+          throw Exception(
+            'Local file url points to a protected path: $normalized',
+          );
+        }
+      }
+    }
+    return path;
+  }
+
   String _buildFilePath(Uri uri, List<String> segments) {
     if (segments.isNotEmpty && segments.first.contains(':')) {
-      return segments.join('/');
+      return _guardLocalFilePath(segments.join('/'));
     }
     final host = uri.host;
     if (host.isNotEmpty && host.toLowerCase() != 'localhost') {
       if (host.length == 1 && RegExp(r'^[a-zA-Z]$').hasMatch(host)) {
-        return '$host:/${segments.join('/')}';
+        return _guardLocalFilePath('$host:/${segments.join('/')}');
       }
-      return '//$host/${segments.join('/')}';
+      return _guardLocalFilePath('//$host/${segments.join('/')}');
     }
-    return '/${segments.join('/')}';
+    return _guardLocalFilePath('/${segments.join('/')}');
   }
 
   Response<dynamic> _buildResponseFromBytes({
@@ -308,16 +358,35 @@ class Request {
     }
 
     final (requestUrl, headers) = _authorizedRequest(url);
-    final response = await _withPlainEncodingRetry(
-      headers,
-      (requestHeaders) => _clashDio.get(
-        requestUrl,
-        options: Options(
-          responseType: ResponseType.bytes,
-          headers: requestHeaders,
+    Response<dynamic> response;
+    try {
+      response = await _withPlainEncodingRetry(
+        headers,
+        (requestHeaders) => _clashDio.get(
+          requestUrl,
+          options: Options(
+            responseType: ResponseType.bytes,
+            headers: requestHeaders,
+          ),
         ),
-      ),
-    );
+      );
+    } on DioException catch (e) {
+      if (e.error is! HandshakeException) rethrow;
+      // 订阅源证书不完整（自签/缺中间证书）时降级，行为与历史版本一致。
+      commonPrint.warn(
+        'TLS verification failed for $requestUrl, retrying with insecure client',
+      );
+      response = await _withPlainEncodingRetry(
+        headers,
+        (requestHeaders) => _clashFallbackDio.get(
+          requestUrl,
+          options: Options(
+            responseType: ResponseType.bytes,
+            headers: requestHeaders,
+          ),
+        ),
+      );
+    }
 
     final rawBytes = _bytesFromResponse(response);
     final decompressedBytes = _decompressIfNeeded(rawBytes, response.headers);
